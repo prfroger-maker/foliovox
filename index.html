@@ -9,9 +9,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <title>FolioVox</title>
-<link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%20%22FolioVox%22%2C%20%22short_name%22%3A%20%22FolioVox%22%2C%20%22description%22%3A%20%22Toda%20pagina%20merece%20uma%20voz.%22%2C%20%22start_url%22%3A%20%22.%22%2C%20%22display%22%3A%20%22standalone%22%2C%20%22background_color%22%3A%20%22%23FBF7F0%22%2C%20%22theme_color%22%3A%20%22%23FBF7F0%22%2C%20%22icons%22%3A%20%5B%7B%22src%22%3A%20%22data%3Aimage/svg%2Bxml%2C%253Csvg%2520xmlns%253D%2522http%253A//www.w3.org/2000/svg%2522%2520viewBox%253D%25220%25200%252064%252064%2522%253E%253Crect%2520width%253D%252264%2522%2520height%253D%252264%2522%2520rx%253D%252214%2522%2520fill%253D%2522%2523FBF7F0%2522/%253E%253Cpath%2520d%253D%2522M10%252016c6-2.6%252012-2.6%252018%2520.9v33c-6-3.5-12-3.5-18-.9V16Z%2522%2520fill%253D%2522none%2522%2520stroke%253D%2522%2523221C15%2522%2520stroke-width%253D%25223%2522%2520stroke-linejoin%253D%2522round%2522/%253E%253Cpath%2520d%253D%2522M28%252017c4.4-2.6%25208.8-3.5%252013.2-2.6v32c-4.4-.9-8.8%25200-13.2%25202.6V17Z%2522%2520fill%253D%2522none%2522%2520stroke%253D%2522%25232F6F62%2522%2520stroke-width%253D%25223%2522%2520stroke-linejoin%253D%2522round%2522/%253E%253Cpath%2520d%253D%2522M46%252025v14M52%252021v22M58%252028v8%2522%2520stroke%253D%2522%25232F6F62%2522%2520stroke-width%253D%25223.4%2522%2520stroke-linecap%253D%2522round%2522/%253E%253C/svg%253E%22%2C%20%22sizes%22%3A%20%22any%22%2C%20%22type%22%3A%20%22image/svg%2Bxml%22%2C%20%22purpose%22%3A%20%22any%20maskable%22%7D%5D%7D">
-<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22%23FBF7F0%22/%3E%3Cpath%20d%3D%22M10%2016c6-2.6%2012-2.6%2018%20.9v33c-6-3.5-12-3.5-18-.9V16Z%22%20fill%3D%22none%22%20stroke%3D%22%23221C15%22%20stroke-width%3D%223%22%20stroke-linejoin%3D%22round%22/%3E%3Cpath%20d%3D%22M28%2017c4.4-2.6%208.8-3.5%2013.2-2.6v32c-4.4-.9-8.8%200-13.2%202.6V17Z%22%20fill%3D%22none%22%20stroke%3D%22%232F6F62%22%20stroke-width%3D%223%22%20stroke-linejoin%3D%22round%22/%3E%3Cpath%20d%3D%22M46%2025v14M52%2021v22M58%2028v8%22%20stroke%3D%22%232F6F62%22%20stroke-width%3D%223.4%22%20stroke-linecap%3D%22round%22/%3E%3C/svg%3E">
-
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22%23FBF7F0%22%2F%3E%3Cpath%20d%3D%22M10%2016c6-2.6%2012-2.6%2018%20.9v33c-6-3.5-12-3.5-18-.9V16Z%22%20fill%3D%22none%22%20stroke%3D%22%23221C15%22%20stroke-width%3D%223%22%20stroke-linejoin%3D%22round%22%2F%3E%3Cpath%20d%3D%22M28%2017c4.4-2.6%208.8-3.5%2013.2-2.6v32c-4.4-.9-8.8%200-13.2%202.6V17Z%22%20fill%3D%22none%22%20stroke%3D%22%23221C15%22%20stroke-width%3D%223%22%20stroke-linejoin%3D%22round%22%2F%3E%3Cpath%20d%3D%22M46%2025v14M52%2021v22M58%2028v8%22%20stroke%3D%22%232F6F62%22%20stroke-width%3D%223.4%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E">
 <style>
 /* FolioVox — styles.css — editorial, warm, accessible. REQ: R-42 */
@@ -1801,14 +1798,53 @@ button { font: inherit; color: inherit; cursor: pointer; }
     return lines;
   };
 
-  /** EPUB (unencrypted) → lines, following the spine order. */
+  /* Algorithms that only scramble embedded fonts so a licensed typeface cannot
+     be lifted out of the book. They are not access control: the text itself is
+     stored in the clear, and the great majority of DRM-free EPUBs that carry an
+     encryption.xml carry only these. */
+  const FONT_OBFUSCATION = [
+    'http://www.idpf.org/2008/embedding',
+    'http://ns.adobe.com/pdf/enc#rc'
+  ];
+  const FONT_FILE = /\.(ttf|otf|ttc|woff2?|eot|dfont)$/i;
+
+  /**
+   * Classify an EPUB's encryption.xml.
+   *
+   * Returns the list of resources whose *content* is encrypted. Font
+   * obfuscation entries are not content encryption, so a book that only
+   * obfuscates its fonts comes back with an empty list and is read normally —
+   * FolioVox simply never loads those fonts. Nothing here decrypts anything.
+   */
+  FV.encryptedResources = function (encXml) {
+    const blocked = [];
+    const blockRe = /<[^>]*EncryptedData\b[\s\S]*?<\/[^>]*EncryptedData>/gi;
+    let block;
+    while ((block = blockRe.exec(encXml))) {
+      const body = block[0];
+      const algM = /<[^>]*EncryptionMethod\b[^>]*\bAlgorithm\s*=\s*"([^"]*)"/i.exec(body);
+      const algorithm = algM ? algM[1].trim().toLowerCase() : '';
+      if (FONT_OBFUSCATION.indexOf(algorithm) >= 0) continue;
+
+      const uriM = /<[^>]*CipherReference\b[^>]*\bURI\s*=\s*"([^"]*)"/i.exec(body);
+      if (!uriM) { blocked.push(''); continue; }      // unknown target: assume content
+      let uri = decodeEntities(uriM[1]);
+      try { uri = decodeURIComponent(uri); } catch (e) { /* keep the raw form */ }
+      if (FONT_FILE.test(uri)) continue;              // an encrypted font is still just a font
+      blocked.push(uri);
+    }
+    return blocked;
+  };
+
+  /** EPUB → lines, following the spine order. Refuses real DRM; never breaks it. */
   FV.epubToLines = function (bytes) {
     const files = FV.readZip(bytes);
     if (files['META-INF/encryption.xml']) {
-      const enc = utf8(files['META-INF/encryption.xml']);
-      if (/EncryptedData/i.test(enc)) {
+      const blocked = FV.encryptedResources(utf8(files['META-INF/encryption.xml']));
+      if (blocked.length) {
         const err = new Error('DRM_PROTECTED');
         err.code = 'DRM_PROTECTED';
+        err.resources = blocked;
         throw err;
       }
     }
@@ -3406,7 +3442,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
       noVoices: 'Nenhuma voz encontrada',
       noVoicesBody: 'Este navegador não ofereceu vozes de síntese de fala. Em geral funciona no Chrome, Edge e Safari.',
       noVoiceForLang: 'Sem voz instalada para este idioma',
-      drmBlocked: 'Este arquivo tem proteção DRM e não pode ser importado. Use um arquivo sem proteção.',
+      drmBlocked: 'O texto deste livro está cifrado por DRM da loja que o vendeu. O FolioVox não remove proteção — leia no aplicativo da loja, ou use uma edição sem DRM (muitas editoras vendem assim).',
       unsupportedFormat: 'Formato não suportado',
       fileTooLarge: 'Arquivo grande demais',
       duplicateFile: 'Este documento já está na biblioteca',
@@ -3554,7 +3590,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
       noVoices: 'Keine Stimmen gefunden',
       noVoicesBody: 'Dieser Browser hat keine Sprachsynthese-Stimmen angeboten. In Chrome, Edge und Safari funktioniert es meist.',
       noVoiceForLang: 'Keine Stimme für diese Sprache installiert',
-      drmBlocked: 'Diese Datei ist DRM-geschützt und kann nicht importiert werden. Bitte eine ungeschützte Datei verwenden.',
+      drmBlocked: 'Der Text dieses Buches ist durch DRM des Händlers verschlüsselt. FolioVox entfernt keinen Kopierschutz — bitte in der App des Händlers lesen oder eine DRM-freie Ausgabe verwenden.',
       unsupportedFormat: 'Format nicht unterstützt',
       fileTooLarge: 'Datei zu groß',
       duplicateFile: 'Dieses Dokument ist bereits in der Bibliothek',
@@ -3702,7 +3738,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
       noVoices: 'No voices found',
       noVoicesBody: 'This browser offered no speech-synthesis voices. Chrome, Edge and Safari usually work.',
       noVoiceForLang: 'No voice installed for this language',
-      drmBlocked: 'This file is DRM protected and cannot be imported. Please use an unprotected file.',
+      drmBlocked: 'This book\'s text is encrypted by the store\'s DRM. FolioVox does not remove protection — read it in the store\'s own app, or use a DRM-free edition.',
       unsupportedFormat: 'Format not supported',
       fileTooLarge: 'File too large',
       duplicateFile: 'This document is already in the library',
@@ -6065,7 +6101,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
           : code === 'FILE_TOO_LARGE' ? t('fileTooLarge')
             : code === 'LEGACY_DOC' ? t('unsupportedFormat') + ' (.doc)'
               : t('unsupportedFormat'),
-        detail: e && e.message
+        detail: code === 'DRM_PROTECTED' && e.resources && e.resources.length
+          ? 'DRM_PROTECTED · ' + e.resources.filter(Boolean).slice(0, 3).join(', ')
+          : e && e.message
       });
     }
   }
