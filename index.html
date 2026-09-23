@@ -499,6 +499,424 @@ button { font: inherit; color: inherit; cursor: pointer; }
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
+/* ===== src/core/crypto.js ===== */
+/* FolioVox — cryptographic primitives, written from scratch.
+ *
+ * Why this file exists: a great many perfectly ordinary PDFs — publishers'
+ * free ebooks, university handouts, scans from a copy shop — are written with
+ * the PDF standard security handler and an EMPTY user password. Every reader
+ * on earth opens them without asking anything, because that is what the format
+ * says to do. FolioVox could not, so it refused them as if they were locked.
+ *
+ * Nothing here breaks a password. When a document really does require one,
+ * FolioVox asks the reader for it and stops if it is not given.
+ *
+ * No dependencies: this environment has no package registry, and the browser's
+ * SubtleCrypto is asynchronous and unavailable on insecure origins, so the
+ * primitives are implemented here and checked against Node's crypto module in
+ * the test suite.
+ */
+(function (FV) {
+  'use strict';
+
+  /* ---------------------------------------------------------------- MD5 --
+   * RFC 1321. Needed for the /O and /U computations of revisions 2 to 4.
+   */
+  const MD5_S = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
+  ];
+  const MD5_K = new Int32Array(64);
+  for (let i = 0; i < 64; i++) MD5_K[i] = (Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296)) | 0;
+
+  function rotl(x, c) { return (x << c) | (x >>> (32 - c)); }
+
+  FV.md5 = function (bytes) {
+    const len = bytes.length;
+    const withPad = ((len + 8) >> 6) + 1;             // 64-byte blocks
+    const msg = new Uint8Array(withPad * 64);
+    msg.set(bytes);
+    msg[len] = 0x80;
+    const bitLen = len * 8;
+    const dv = new DataView(msg.buffer);
+    dv.setUint32(withPad * 64 - 8, bitLen >>> 0, true);
+    dv.setUint32(withPad * 64 - 4, Math.floor(bitLen / 4294967296), true);
+
+    let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+    const M = new Int32Array(16);
+    for (let block = 0; block < withPad; block++) {
+      for (let j = 0; j < 16; j++) M[j] = dv.getInt32(block * 64 + j * 4, true);
+      let A = a0, B = b0, C = c0, D = d0;
+      for (let i = 0; i < 64; i++) {
+        let F, g;
+        if (i < 16) { F = (B & C) | (~B & D); g = i; }
+        else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) & 15; }
+        else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) & 15; }
+        else { F = C ^ (B | ~D); g = (7 * i) & 15; }
+        F = (F + A + MD5_K[i] + M[g]) | 0;
+        A = D; D = C; C = B;
+        B = (B + rotl(F, MD5_S[i])) | 0;
+      }
+      a0 = (a0 + A) | 0; b0 = (b0 + B) | 0; c0 = (c0 + C) | 0; d0 = (d0 + D) | 0;
+    }
+    const out = new Uint8Array(16);
+    const odv = new DataView(out.buffer);
+    odv.setInt32(0, a0, true); odv.setInt32(4, b0, true);
+    odv.setInt32(8, c0, true); odv.setInt32(12, d0, true);
+    return out;
+  };
+
+  /* ---------------------------------------------------------------- RC4 --
+   * Used by revisions 2 to 4 when /V is 1 or 2. Symmetric: the same call
+   * both encrypts and decrypts.
+   */
+  FV.rc4 = function (key, data) {
+    const S = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) S[i] = i;
+    let j = 0;
+    for (let i = 0; i < 256; i++) {
+      j = (j + S[i] + key[i % key.length]) & 255;
+      const t = S[i]; S[i] = S[j]; S[j] = t;
+    }
+    const out = new Uint8Array(data.length);
+    let i = 0; j = 0;
+    for (let k = 0; k < data.length; k++) {
+      i = (i + 1) & 255;
+      j = (j + S[i]) & 255;
+      const t = S[i]; S[i] = S[j]; S[j] = t;
+      out[k] = data[k] ^ S[(S[i] + S[j]) & 255];
+    }
+    return out;
+  };
+
+  /* ------------------------------------------------------------- SHA-2 --
+   * SHA-256 for revision 6 key derivation; SHA-384 and SHA-512 for the
+   * hardened hash of algorithm 2.B.
+   */
+  const K256 = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ]);
+
+  FV.sha256 = function (bytes) {
+    const H = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+    const len = bytes.length;
+    const blocks = ((len + 8) >> 6) + 1;
+    const msg = new Uint8Array(blocks * 64);
+    msg.set(bytes);
+    msg[len] = 0x80;
+    const dv = new DataView(msg.buffer);
+    dv.setUint32(blocks * 64 - 8, Math.floor(len * 8 / 4294967296));
+    dv.setUint32(blocks * 64 - 4, (len * 8) >>> 0);
+    const w = new Uint32Array(64);
+    for (let b = 0; b < blocks; b++) {
+      for (let i = 0; i < 16; i++) w[i] = dv.getUint32(b * 64 + i * 4);
+      for (let i = 16; i < 64; i++) {
+        const a = w[i - 15], c = w[i - 2];
+        const s0 = ((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3);
+        const s1 = ((c >>> 17) | (c << 15)) ^ ((c >>> 19) | (c << 13)) ^ (c >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+      }
+      let a = H[0], b2 = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+      for (let i = 0; i < 64; i++) {
+        const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+        const ch = (e & f) ^ (~e & g);
+        const t1 = (h + S1 + ch + K256[i] + w[i]) >>> 0;
+        const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+        const maj = (a & b2) ^ (a & c) ^ (b2 & c);
+        const t2 = (S0 + maj) >>> 0;
+        h = g; g = f; f = e; e = (d + t1) >>> 0;
+        d = c; c = b2; b2 = a; a = (t1 + t2) >>> 0;
+      }
+      H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b2) >>> 0; H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
+      H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0; H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
+    }
+    const out = new Uint8Array(32);
+    const odv = new DataView(out.buffer);
+    for (let i = 0; i < 8; i++) odv.setUint32(i * 4, H[i]);
+    return out;
+  };
+
+  /* SHA-512 / SHA-384 over 32-bit halves, since JavaScript has no 64-bit int. */
+  const K512 = [
+    '428a2f98d728ae22', '7137449123ef65cd', 'b5c0fbcfec4d3b2f', 'e9b5dba58189dbbc',
+    '3956c25bf348b538', '59f111f1b605d019', '923f82a4af194f9b', 'ab1c5ed5da6d8118',
+    'd807aa98a3030242', '12835b0145706fbe', '243185be4ee4b28c', '550c7dc3d5ffb4e2',
+    '72be5d74f27b896f', '80deb1fe3b1696b1', '9bdc06a725c71235', 'c19bf174cf692694',
+    'e49b69c19ef14ad2', 'efbe4786384f25e3', '0fc19dc68b8cd5b5', '240ca1cc77ac9c65',
+    '2de92c6f592b0275', '4a7484aa6ea6e483', '5cb0a9dcbd41fbd4', '76f988da831153b5',
+    '983e5152ee66dfab', 'a831c66d2db43210', 'b00327c898fb213f', 'bf597fc7beef0ee4',
+    'c6e00bf33da88fc2', 'd5a79147930aa725', '06ca6351e003826f', '142929670a0e6e70',
+    '27b70a8546d22ffc', '2e1b21385c26c926', '4d2c6dfc5ac42aed', '53380d139d95b3df',
+    '650a73548baf63de', '766a0abb3c77b2a8', '81c2c92e47edaee6', '92722c851482353b',
+    'a2bfe8a14cf10364', 'a81a664bbc423001', 'c24b8b70d0f89791', 'c76c51a30654be30',
+    'd192e819d6ef5218', 'd69906245565a910', 'f40e35855771202a', '106aa07032bbd1b8',
+    '19a4c116b8d2d0c8', '1e376c085141ab53', '2748774cdf8eeb99', '34b0bcb5e19b48a8',
+    '391c0cb3c5c95a63', '4ed8aa4ae3418acb', '5b9cca4f7763e373', '682e6ff3d6b2b8a3',
+    '748f82ee5defb2fc', '78a5636f43172f60', '84c87814a1f0ab72', '8cc702081a6439ec',
+    '90befffa23631e28', 'a4506cebde82bde9', 'bef9a3f7b2c67915', 'c67178f2e372532b',
+    'ca273eceea26619c', 'd186b8c721c0c207', 'eada7dd6cde0eb1e', 'f57d4f7fee6ed178',
+    '06f067aa72176fba', '0a637dc5a2c898a6', '113f9804bef90dae', '1b710b35131c471b',
+    '28db77f523047d84', '32caab7b40c72493', '3c9ebe0a15c9bebc', '431d67c49c100d4c',
+    '4cc5d4becb3e42b6', '597f299cfc657e2a', '5fcb6fab3ad6faec', '6c44198c4a475817'
+  ].map(function (h) { return [parseInt(h.slice(0, 8), 16), parseInt(h.slice(8), 16)]; });
+
+  function sha512Core(bytes, initial, outBytes) {
+    const H = initial.map(function (p) { return [p[0], p[1]]; });
+    const len = bytes.length;
+    const blocks = ((len + 16) >> 7) + 1;              // 128-byte blocks
+    const msg = new Uint8Array(blocks * 128);
+    msg.set(bytes);
+    msg[len] = 0x80;
+    const dv = new DataView(msg.buffer);
+    dv.setUint32(blocks * 128 - 8, Math.floor(len * 8 / 4294967296));
+    dv.setUint32(blocks * 128 - 4, (len * 8) >>> 0);
+
+    const wh = new Int32Array(80), wl = new Int32Array(80);
+    for (let b = 0; b < blocks; b++) {
+      for (let i = 0; i < 16; i++) {
+        wh[i] = dv.getInt32(b * 128 + i * 8);
+        wl[i] = dv.getInt32(b * 128 + i * 8 + 4);
+      }
+      for (let i = 16; i < 80; i++) {
+        let xh = wh[i - 15], xl = wl[i - 15];
+        const s0h = ((xh >>> 1) | (xl << 31)) ^ ((xh >>> 8) | (xl << 24)) ^ (xh >>> 7);
+        const s0l = ((xl >>> 1) | (xh << 31)) ^ ((xl >>> 8) | (xh << 24)) ^ ((xl >>> 7) | (xh << 25));
+        xh = wh[i - 2]; xl = wl[i - 2];
+        const s1h = ((xh >>> 19) | (xl << 13)) ^ ((xl >>> 29) | (xh << 3)) ^ (xh >>> 6);
+        const s1l = ((xl >>> 19) | (xh << 13)) ^ ((xh >>> 29) | (xl << 3)) ^ ((xl >>> 6) | (xh << 26));
+        // 64-bit add of four terms, low halves first
+        let lo = (wl[i - 16] >>> 0) + (s0l >>> 0) + (wl[i - 7] >>> 0) + (s1l >>> 0);
+        let hi = (wh[i - 16] >>> 0) + (s0h >>> 0) + (wh[i - 7] >>> 0) + (s1h >>> 0) + Math.floor(lo / 4294967296);
+        wl[i] = lo | 0; wh[i] = hi | 0;
+      }
+      let ah = H[0][0], al = H[0][1], bh = H[1][0], bl = H[1][1],
+        ch = H[2][0], cl = H[2][1], dh = H[3][0], dl = H[3][1],
+        eh = H[4][0], el = H[4][1], fh = H[5][0], fl = H[5][1],
+        gh = H[6][0], gl = H[6][1], hh = H[7][0], hl = H[7][1];
+      for (let i = 0; i < 80; i++) {
+        const S1h = ((eh >>> 14) | (el << 18)) ^ ((eh >>> 18) | (el << 14)) ^ ((el >>> 9) | (eh << 23));
+        const S1l = ((el >>> 14) | (eh << 18)) ^ ((el >>> 18) | (eh << 14)) ^ ((eh >>> 9) | (el << 23));
+        const chh = (eh & fh) ^ (~eh & gh);
+        const chl = (el & fl) ^ (~el & gl);
+        let lo = (hl >>> 0) + (S1l >>> 0) + (chl >>> 0) + (K512[i][1] >>> 0) + (wl[i] >>> 0);
+        let hi = (hh >>> 0) + (S1h >>> 0) + (chh >>> 0) + (K512[i][0] >>> 0) + (wh[i] >>> 0) + Math.floor(lo / 4294967296);
+        const t1l = lo | 0, t1h = hi | 0;
+
+        const S0h = ((ah >>> 28) | (al << 4)) ^ ((al >>> 2) | (ah << 30)) ^ ((al >>> 7) | (ah << 25));
+        const S0l = ((al >>> 28) | (ah << 4)) ^ ((ah >>> 2) | (al << 30)) ^ ((ah >>> 7) | (al << 25));
+        const majh = (ah & bh) ^ (ah & ch) ^ (bh & ch);
+        const majl = (al & bl) ^ (al & cl) ^ (bl & cl);
+        lo = (S0l >>> 0) + (majl >>> 0);
+        hi = (S0h >>> 0) + (majh >>> 0) + Math.floor(lo / 4294967296);
+        const t2l = lo | 0, t2h = hi | 0;
+
+        hh = gh; hl = gl; gh = fh; gl = fl; fh = eh; fl = el;
+        lo = (dl >>> 0) + (t1l >>> 0);
+        hi = (dh >>> 0) + (t1h >>> 0) + Math.floor(lo / 4294967296);
+        eh = hi | 0; el = lo | 0;
+        dh = ch; dl = cl; ch = bh; cl = bl; bh = ah; bl = al;
+        lo = (t1l >>> 0) + (t2l >>> 0);
+        hi = (t1h >>> 0) + (t2h >>> 0) + Math.floor(lo / 4294967296);
+        ah = hi | 0; al = lo | 0;
+      }
+      const add = function (idx, xh, xl) {
+        const lo = (H[idx][1] >>> 0) + (xl >>> 0);
+        const hi = (H[idx][0] >>> 0) + (xh >>> 0) + Math.floor(lo / 4294967296);
+        H[idx][0] = hi | 0; H[idx][1] = lo | 0;
+      };
+      add(0, ah, al); add(1, bh, bl); add(2, ch, cl); add(3, dh, dl);
+      add(4, eh, el); add(5, fh, fl); add(6, gh, gl); add(7, hh, hl);
+    }
+    const out = new Uint8Array(64);
+    const odv = new DataView(out.buffer);
+    for (let i = 0; i < 8; i++) { odv.setInt32(i * 8, H[i][0]); odv.setInt32(i * 8 + 4, H[i][1]); }
+    return out.subarray(0, outBytes);
+  }
+
+  const H512 = [[0x6a09e667, 0xf3bcc908], [0xbb67ae85, 0x84caa73b], [0x3c6ef372, 0xfe94f82b],
+    [0xa54ff53a, 0x5f1d36f1], [0x510e527f, 0xade682d1], [0x9b05688c, 0x2b3e6c1f],
+    [0x1f83d9ab, 0xfb41bd6b], [0x5be0cd19, 0x137e2179]];
+  const H384 = [[0xcbbb9d5d, 0xc1059ed8], [0x629a292a, 0x367cd507], [0x9159015a, 0x3070dd17],
+    [0x152fecd8, 0xf70e5939], [0x67332667, 0xffc00b31], [0x8eb44a87, 0x68581511],
+    [0xdb0c2e0d, 0x64f98fa7], [0x47b5481d, 0xbefa4fa4]];
+
+  FV.sha512 = function (bytes) { return sha512Core(bytes, H512, 64); };
+  FV.sha384 = function (bytes) { return sha512Core(bytes, H384, 48); };
+
+  /* ---------------------------------------------------------------- AES --
+   * 128 and 256 bit, CBC. Both directions: decryption reads the document,
+   * encryption is needed by the revision 6 key-derivation loop.
+   */
+  const SBOX = new Uint8Array(256), INV_SBOX = new Uint8Array(256);
+  const RCON = new Uint8Array([0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d]);
+  (function buildTables() {
+    const p = new Uint8Array(256), l = new Uint8Array(256);
+    let x = 1;
+    for (let i = 0; i < 255; i++) {                    // generator 3 over GF(2^8)
+      p[i] = x; l[x] = i;
+      x ^= (x << 1) ^ ((x & 0x80) ? 0x11b : 0);
+      x &= 255;
+    }
+    SBOX[0] = 0x63;
+    for (let i = 0; i < 255; i++) {
+      /* The inverse of p[i] is p[255-i], and for i = 0 that index wraps back
+         to 0 — the log table has 255 entries, not 256. Without the modulo the
+         single entry SBOX[1] comes out wrong, which most test vectors never
+         touch. */
+      const inv = p[(255 - i) % 255];                  // multiplicative inverse
+      const s = inv ^ (inv << 1 | inv >>> 7) ^ (inv << 2 | inv >>> 6)
+        ^ (inv << 3 | inv >>> 5) ^ (inv << 4 | inv >>> 4);
+      SBOX[p[i]] = (s ^ 0x63) & 255;
+    }
+    for (let i = 0; i < 256; i++) INV_SBOX[SBOX[i]] = i;
+  })();
+
+  function xtime(a) { return ((a << 1) ^ ((a & 0x80) ? 0x1b : 0)) & 255; }
+  function mul(a, b) {
+    let r = 0;
+    while (b) { if (b & 1) r ^= a; a = xtime(a); b >>= 1; }
+    return r & 255;
+  }
+
+  function expandKey(key) {
+    const nk = key.length / 4;                         // 4 or 8
+    const nr = nk + 6;
+    const w = new Uint8Array(16 * (nr + 1));
+    w.set(key);
+    for (let i = nk; i < 4 * (nr + 1); i++) {
+      let t0 = w[(i - 1) * 4], t1 = w[(i - 1) * 4 + 1], t2 = w[(i - 1) * 4 + 2], t3 = w[(i - 1) * 4 + 3];
+      if (i % nk === 0) {
+        const t = t0;
+        t0 = SBOX[t1] ^ RCON[i / nk - 1]; t1 = SBOX[t2]; t2 = SBOX[t3]; t3 = SBOX[t];
+      } else if (nk > 6 && i % nk === 4) {
+        t0 = SBOX[t0]; t1 = SBOX[t1]; t2 = SBOX[t2]; t3 = SBOX[t3];
+      }
+      w[i * 4] = w[(i - nk) * 4] ^ t0;
+      w[i * 4 + 1] = w[(i - nk) * 4 + 1] ^ t1;
+      w[i * 4 + 2] = w[(i - nk) * 4 + 2] ^ t2;
+      w[i * 4 + 3] = w[(i - nk) * 4 + 3] ^ t3;
+    }
+    return { w: w, nr: nr };
+  }
+
+  function addRoundKey(s, w, round) {
+    for (let i = 0; i < 16; i++) s[i] ^= w[round * 16 + i];
+  }
+
+  function encryptBlock(s, ks) {
+    addRoundKey(s, ks.w, 0);
+    for (let round = 1; round <= ks.nr; round++) {
+      for (let i = 0; i < 16; i++) s[i] = SBOX[s[i]];
+      let t;
+      t = s[1]; s[1] = s[5]; s[5] = s[9]; s[9] = s[13]; s[13] = t;
+      t = s[2]; s[2] = s[10]; s[10] = t; t = s[6]; s[6] = s[14]; s[14] = t;
+      t = s[15]; s[15] = s[11]; s[11] = s[7]; s[7] = s[3]; s[3] = t;
+      if (round !== ks.nr) {
+        for (let c = 0; c < 4; c++) {
+          const a0 = s[c * 4], a1 = s[c * 4 + 1], a2 = s[c * 4 + 2], a3 = s[c * 4 + 3];
+          s[c * 4] = mul(a0, 2) ^ mul(a1, 3) ^ a2 ^ a3;
+          s[c * 4 + 1] = a0 ^ mul(a1, 2) ^ mul(a2, 3) ^ a3;
+          s[c * 4 + 2] = a0 ^ a1 ^ mul(a2, 2) ^ mul(a3, 3);
+          s[c * 4 + 3] = mul(a0, 3) ^ a1 ^ a2 ^ mul(a3, 2);
+        }
+      }
+      addRoundKey(s, ks.w, round);
+    }
+  }
+
+  function decryptBlock(s, ks) {
+    addRoundKey(s, ks.w, ks.nr);
+    for (let round = ks.nr - 1; round >= 0; round--) {
+      let t;
+      t = s[13]; s[13] = s[9]; s[9] = s[5]; s[5] = s[1]; s[1] = t;
+      t = s[2]; s[2] = s[10]; s[10] = t; t = s[6]; s[6] = s[14]; s[14] = t;
+      t = s[3]; s[3] = s[7]; s[7] = s[11]; s[11] = s[15]; s[15] = t;
+      for (let i = 0; i < 16; i++) s[i] = INV_SBOX[s[i]];
+      addRoundKey(s, ks.w, round);
+      if (round !== 0) {
+        for (let c = 0; c < 4; c++) {
+          const a0 = s[c * 4], a1 = s[c * 4 + 1], a2 = s[c * 4 + 2], a3 = s[c * 4 + 3];
+          s[c * 4] = mul(a0, 14) ^ mul(a1, 11) ^ mul(a2, 13) ^ mul(a3, 9);
+          s[c * 4 + 1] = mul(a0, 9) ^ mul(a1, 14) ^ mul(a2, 11) ^ mul(a3, 13);
+          s[c * 4 + 2] = mul(a0, 13) ^ mul(a1, 9) ^ mul(a2, 14) ^ mul(a3, 11);
+          s[c * 4 + 3] = mul(a0, 11) ^ mul(a1, 13) ^ mul(a2, 9) ^ mul(a3, 14);
+        }
+      }
+    }
+  }
+
+  /** AES-CBC encryption with no padding. `data` must be a multiple of 16. */
+  FV.aesEncryptCBC = function (key, iv, data) {
+    const ks = expandKey(key);
+    const out = new Uint8Array(data.length);
+    const prev = new Uint8Array(iv);
+    const block = new Uint8Array(16);
+    for (let off = 0; off < data.length; off += 16) {
+      for (let i = 0; i < 16; i++) block[i] = data[off + i] ^ prev[i];
+      encryptBlock(block, ks);
+      out.set(block, off);
+      prev.set(block);
+    }
+    return out;
+  };
+
+  /**
+   * AES-CBC decryption. With `leadingIv`, the first 16 bytes of `data` are the
+   * initialisation vector, which is how PDF stores it. PKCS#7 padding is
+   * removed when it is well formed; a malformed tail is left alone rather than
+   * throwing, because a truncated stream should still yield the text it has.
+   */
+  FV.aesDecryptCBC = function (key, data, leadingIv) {
+    let iv, body;
+    if (leadingIv === false) { iv = new Uint8Array(16); body = data; }
+    else { iv = data.subarray(0, 16); body = data.subarray(16); }
+    const n = body.length - (body.length % 16);
+    if (n <= 0) return new Uint8Array(0);
+    const ks = expandKey(key);
+    const out = new Uint8Array(n);
+    const prev = new Uint8Array(iv);
+    const cipher = new Uint8Array(16);
+    const block = new Uint8Array(16);
+    for (let off = 0; off < n; off += 16) {
+      cipher.set(body.subarray(off, off + 16));
+      block.set(cipher);
+      decryptBlock(block, ks);
+      for (let i = 0; i < 16; i++) out[off + i] = block[i] ^ prev[i];
+      prev.set(cipher);
+    }
+    const pad = out[n - 1];
+    if (pad >= 1 && pad <= 16 && pad <= n) {
+      let valid = true;
+      for (let i = n - pad; i < n; i++) if (out[i] !== pad) { valid = false; break; }
+      if (valid) return out.subarray(0, n - pad);
+    }
+    return out;
+  };
+
+  /** Single-block AES-ECB decryption, used for the /Perms sanity check. */
+  FV.aesDecryptECB = function (key, data) {
+    const ks = expandKey(key);
+    const out = new Uint8Array(data.length - (data.length % 16));
+    const block = new Uint8Array(16);
+    for (let off = 0; off < out.length; off += 16) {
+      block.set(data.subarray(off, off + 16));
+      decryptBlock(block, ks);
+      out.set(block, off);
+    }
+    return out;
+  };
+})(typeof FV !== 'undefined' ? FV : (this.FV = {}));
+
 /* ===== src/core/inflate.js ===== */
 /* FolioVox — inflate.js
  * Dependency-free DEFLATE / zlib decompressor (RFC 1950 / 1951).
@@ -786,6 +1204,218 @@ button { font: inherit; color: inherit; cursor: pointer; }
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
+/* ===== src/core/pdfcrypt.js ===== */
+/* FolioVox — the PDF standard security handler.
+ *
+ * What this does: derives the file key from the password the reader has, and
+ * decrypts the document's streams and strings. Revisions 2 to 6 — RC4 40 and
+ * 128 bit, AES-128 and AES-256.
+ *
+ * What this does not do: it never searches for, guesses or brute-forces a
+ * password. The only passwords it ever tries are the empty one — which is
+ * what a conforming reader must try first, and what the overwhelming majority
+ * of "protected" PDFs actually use — and one the reader types in. A document
+ * that neither opens with the empty password nor with the password given is
+ * reported as locked and left alone.
+ *
+ * Reference: ISO 32000-1 §7.6.3 (algorithms 2 to 7) and ISO 32000-2 §7.6.4.
+ */
+(function (FV) {
+  'use strict';
+
+  const PAD = new Uint8Array([
+    0x28, 0xBF, 0x4E, 0x5E, 0x4E, 0x75, 0x8A, 0x41, 0x64, 0x00, 0x4E, 0x56,
+    0xFF, 0xFA, 0x01, 0x08, 0x2E, 0x2E, 0x00, 0xB6, 0xD0, 0x68, 0x3E, 0x80,
+    0x2F, 0x0C, 0xA9, 0xFE, 0x64, 0x53, 0x69, 0x7A
+  ]);
+  const SALT_AES = new Uint8Array([0x73, 0x41, 0x6C, 0x54]);   // "sAlT"
+
+  function cat() {
+    let n = 0;
+    for (let i = 0; i < arguments.length; i++) n += arguments[i].length;
+    const out = new Uint8Array(n);
+    let o = 0;
+    for (let i = 0; i < arguments.length; i++) { out.set(arguments[i], o); o += arguments[i].length; }
+    return out;
+  }
+  function eq(a, b, n) {
+    if (!a || !b) return false;
+    for (let i = 0; i < n; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+  /** A password as PDF wants it: PDFDocEncoding bytes, padded or truncated to 32. */
+  function padPassword(pwBytes) {
+    const out = new Uint8Array(32);
+    const n = Math.min(pwBytes.length, 32);
+    out.set(pwBytes.subarray(0, n));
+    out.set(PAD.subarray(0, 32 - n), n);
+    return out;
+  }
+  function toBytes(s) {
+    if (!s) return new Uint8Array(0);
+    if (s instanceof Uint8Array) return s;
+    const out = [];
+    for (let i = 0; i < s.length; i++) {
+      const c = s.codePointAt(i);
+      if (c > 0xffff) i++;
+      if (c < 0x80) out.push(c);
+      else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+      else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+      else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    }
+    return new Uint8Array(out);
+  }
+
+  /* Algorithm 2.B — the hardened hash of revision 6. */
+  function hash2B(password, salt, udata, revision) {
+    let K = FV.sha256(cat(password, salt, udata || new Uint8Array(0)));
+    if (revision < 6) return K;
+    let round = 0;
+    for (;;) {
+      const one = cat(password, K, udata || new Uint8Array(0));
+      const K1 = new Uint8Array(one.length * 64);
+      for (let i = 0; i < 64; i++) K1.set(one, i * one.length);
+      const E = FV.aesEncryptCBC(K.subarray(0, 16), K.subarray(16, 32), K1);
+      let mod = 0;
+      for (let i = 0; i < 16; i++) mod += E[i];
+      mod %= 3;
+      K = mod === 0 ? FV.sha256(E) : mod === 1 ? FV.sha384(E) : FV.sha512(E);
+      round++;
+      if (round >= 64 && E[E.length - 1] <= round - 32) break;
+    }
+    return K.subarray(0, 32);
+  }
+
+  /* Algorithm 2 — the file key for revisions 2 to 4. */
+  function fileKeyLegacy(password, O, P, id0, revision, keyLen, encryptMetadata) {
+    const pbytes = new Uint8Array(4);
+    new DataView(pbytes.buffer).setInt32(0, P | 0, true);
+    let input = cat(padPassword(password), O.subarray(0, 32), pbytes, id0 || new Uint8Array(0));
+    if (revision >= 4 && encryptMetadata === false) {
+      input = cat(input, new Uint8Array([0xff, 0xff, 0xff, 0xff]));
+    }
+    let hash = FV.md5(input);
+    if (revision >= 3) {
+      for (let i = 0; i < 50; i++) hash = FV.md5(hash.subarray(0, keyLen));
+    }
+    return hash.subarray(0, keyLen);
+  }
+
+  /* Algorithms 4 and 5 — what /U should look like for this key. */
+  function expectedU(key, id0, revision) {
+    if (revision === 2) return FV.rc4(key, PAD);
+    const h = FV.md5(cat(PAD, id0 || new Uint8Array(0)));
+    let val = FV.rc4(key, h);
+    const k2 = new Uint8Array(key.length);
+    for (let i = 1; i <= 19; i++) {
+      for (let j = 0; j < key.length; j++) k2[j] = key[j] ^ i;
+      val = FV.rc4(k2, val);
+    }
+    return val;
+  }
+
+  /**
+   * Build a decryptor for a document.
+   *
+   * @param enc   the /Encrypt dictionary, already resolved, with /O /U /P etc.
+   * @param id0   first element of the trailer's /ID, as bytes
+   * @param password what the reader typed, or '' for the usual case
+   * @returns {{ok:true, decrypt:Function, method:string}} or
+   *          {{ok:false, reason:'PASSWORD_REQUIRED'|'UNSUPPORTED'}}
+   */
+  FV.pdfDecryptor = function (enc, id0, password) {
+    if (!enc) return { ok: false, reason: 'UNSUPPORTED' };
+    const filter = enc.Filter && enc.Filter.name;
+    if (filter && filter !== 'Standard') return { ok: false, reason: 'UNSUPPORTED' };
+
+    const V = enc.V || 0;
+    const R = enc.R || 0;
+    const O = enc.O instanceof Uint8Array ? enc.O : new Uint8Array(32);
+    const U = enc.U instanceof Uint8Array ? enc.U : new Uint8Array(32);
+    const P = typeof enc.P === 'number' ? enc.P : -1;
+    const pw = toBytes(password || '');
+
+    let key = null, stmMethod = 'rc4', strMethod = 'rc4';
+
+    if (V === 5 || R === 5 || R === 6) {
+      /* AES-256. The user password is checked against the validation salt;
+         the file key is then unwrapped from /UE. */
+      if (U.length < 48) return { ok: false, reason: 'UNSUPPORTED' };
+      const vSalt = U.subarray(32, 40), kSalt = U.subarray(40, 48);
+      const check = hash2B(pw, vSalt, null, R);
+      if (!eq(check, U, 32)) return { ok: false, reason: 'PASSWORD_REQUIRED' };
+      const ikey = hash2B(pw, kSalt, null, R);
+      const UE = enc.UE instanceof Uint8Array ? enc.UE : null;
+      if (!UE || UE.length < 32) return { ok: false, reason: 'UNSUPPORTED' };
+      key = FV.aesDecryptCBC(ikey, UE.subarray(0, 32), false);
+      if (key.length < 32) return { ok: false, reason: 'UNSUPPORTED' };
+      key = key.subarray(0, 32);
+      stmMethod = strMethod = 'aes';
+    } else {
+      let keyLen = R === 2 ? 5 : Math.floor((enc.Length || 40) / 8);
+      if (!(keyLen >= 5 && keyLen <= 16)) keyLen = 5;
+
+      /* Revision 4 names its algorithms in a crypt-filter dictionary. */
+      if (V === 4 && enc.CF) {
+        const pick = function (nameObj) {
+          const n = nameObj && nameObj.name;
+          if (!n || n === 'Identity') return { m: 'identity', len: keyLen };
+          const cf = enc.CF[n];
+          if (!cf) return { m: 'rc4', len: keyLen };
+          const cfm = cf.CFM && cf.CFM.name;
+          let len = cf.Length || keyLen * 8;
+          if (len > 40) len = Math.floor(len / 8);            // written in bits
+          if (!(len >= 5 && len <= 32)) len = keyLen;
+          if (cfm === 'AESV2') return { m: 'aes', len: 16 };
+          if (cfm === 'AESV3') return { m: 'aes', len: 32 };
+          if (cfm === 'None') return { m: 'identity', len: len };
+          return { m: 'rc4', len: len };
+        };
+        const s = pick(enc.StmF), t = pick(enc.StrF);
+        stmMethod = s.m; strMethod = t.m;
+        keyLen = s.m === 'identity' ? t.len : s.len;
+      }
+
+      key = fileKeyLegacy(pw, O, P, id0, R, keyLen, enc.EncryptMetadata);
+      const want = expectedU(key, id0, R);
+      const compare = R === 2 ? 32 : 16;
+      if (!eq(want, U, compare)) return { ok: false, reason: 'PASSWORD_REQUIRED' };
+    }
+
+    const aes256 = key.length === 32 && (V === 5 || R >= 5);
+
+    /** Per-object key (algorithm 1). AES-256 uses the file key unchanged. */
+    const objectKey = function (num, gen, useAes) {
+      if (aes256) return key;
+      const ext = new Uint8Array(key.length + 5 + (useAes ? 4 : 0));
+      ext.set(key, 0);
+      ext[key.length] = num & 0xff;
+      ext[key.length + 1] = (num >> 8) & 0xff;
+      ext[key.length + 2] = (num >> 16) & 0xff;
+      ext[key.length + 3] = gen & 0xff;
+      ext[key.length + 4] = (gen >> 8) & 0xff;
+      if (useAes) ext.set(SALT_AES, key.length + 5);
+      return FV.md5(ext).subarray(0, Math.min(key.length + 5, 16));
+    };
+
+    const run = function (method) {
+      return function (data, num, gen) {
+        if (method === 'identity' || !data || !data.length) return data;
+        const useAes = method === 'aes';
+        const k = objectKey(num || 0, gen || 0, useAes && !aes256);
+        return useAes ? FV.aesDecryptCBC(k, data, true) : FV.rc4(k, data);
+      };
+    };
+
+    return {
+      ok: true,
+      method: (stmMethod === 'aes' ? (aes256 ? 'AES-256' : 'AES-128') : stmMethod === 'identity' ? 'none' : 'RC4-' + (key.length * 8)),
+      decryptStream: run(stmMethod),
+      decryptString: run(strMethod)
+    };
+  };
+})(typeof FV !== 'undefined' ? FV : (this.FV = {}));
+
 /* ===== src/core/pdf.js ===== */
 /* FolioVox — pdf.js
  * Dependency-free PDF text extractor.
@@ -999,12 +1629,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
   }
 
   /* ------------------------------------------------------------- document */
-  function PDFDocument(bytes) {
+  function PDFDocument(bytes, password) {
     this.buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     this.objects = new Map();      // "num" -> offset
+    this.gens = new Map();         // "num" -> generation
     this.cache = new Map();        // "num" -> parsed
     this.objStmPending = [];
     this.encrypted = false;
+    this.locked = false;           // encrypted and the password did not open it
+    this.crypt = null;             // the decryptor, once the password is right
+    this.cryptMethod = null;
+    this.password = password || '';
     this._scan();
   }
 
@@ -1029,6 +1664,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
       const num = parseInt(latin1(b.subarray(numStart, numEnd)), 10);
       if (!isFinite(num)) continue;
       this.objects.set(String(num), i + 3);
+      const gen = parseInt(latin1(b.subarray(genStart, genEnd)), 10);
+      this.gens.set(String(num), isFinite(gen) ? gen : 0);
     }
     // Trailer dictionaries (may be several with incremental updates)
     this.trailers = [];
@@ -1044,6 +1681,22 @@ button { font: inherit; color: inherit; cursor: pointer; }
       } catch (e) { /* ignore */ }
       ti = idx + TR.length;
     }
+    /* A cross-reference stream carries the same entries a trailer would, so
+       for our purposes it is one: /Root, /Info, /ID and /Encrypt all live
+       there in a modern file. It is never itself encrypted. */
+    for (const [num] of Array.from(this.objects)) {
+      let o;
+      try { o = this.getObject(num); } catch (e) { continue; }
+      if (o instanceof PStream && o.dict && o.dict.Type && o.dict.Type.name === 'XRef') {
+        this.trailers.push(o.dict);
+        this._xrefStreams = (this._xrefStreams || new Set()).add(o);
+      }
+    }
+    for (const t of this.trailers) if (t.Encrypt) this.encrypted = true;
+
+    /* Unlock before expanding object streams — those are encrypted too. */
+    if (this.encrypted) this._setupDecryption();
+
     // Expand object streams so compressed objects become reachable.
     for (const [num] of Array.from(this.objects)) {
       let o;
@@ -1051,9 +1704,51 @@ button { font: inherit; color: inherit; cursor: pointer; }
       if (o instanceof PStream && o.dict && o.dict.Type && o.dict.Type.name === 'ObjStm') {
         try { this._expandObjStm(o); } catch (e) { /* ignore */ }
       }
-      if (o instanceof PStream && o.dict && o.dict.Type && o.dict.Type.name === 'XRef' && o.dict.Encrypt) this.encrypted = true;
     }
-    for (const t of this.trailers) if (t.Encrypt) this.encrypted = true;
+  };
+
+  /**
+   * Try to open an encrypted document.
+   *
+   * The empty password comes first, because that is what the specification
+   * tells a reader to try and what most "protected" PDFs use — the encryption
+   * there carries permission flags, not a lock. If that fails, whatever
+   * password the reader supplied is tried. If that fails too, the document is
+   * marked locked and nothing further is attempted: no guessing, ever.
+   */
+  PDFDocument.prototype._setupDecryption = function () {
+    if (!FV.pdfDecryptor) { this.locked = true; return; }
+    let encDict = null;
+    for (let i = this.trailers.length - 1; i >= 0 && !encDict; i--) {
+      if (this.trailers[i].Encrypt) {
+        this._encryptRef = this.trailers[i].Encrypt;
+        encDict = this.resolve(this.trailers[i].Encrypt);
+      }
+    }
+    if (!encDict) { this.locked = true; return; }
+
+    let id0 = null;
+    for (let i = this.trailers.length - 1; i >= 0 && !id0; i--) {
+      const id = this.resolve(this.trailers[i].ID);
+      if (Array.isArray(id) && id.length) {
+        const first = this.resolve(id[0]);
+        if (first instanceof Uint8Array) id0 = first;
+      }
+    }
+
+    const tries = [''];
+    if (this.password) tries.push(this.password);
+    for (let i = 0; i < tries.length; i++) {
+      let r = null;
+      try { r = FV.pdfDecryptor(encDict, id0, tries[i]); } catch (e) { r = null; }
+      if (r && r.ok) {
+        this.crypt = r;
+        this.cryptMethod = r.method;
+        this.usedPassword = tries[i];
+        return;
+      }
+    }
+    this.locked = true;
   };
 
   PDFDocument.prototype._expandObjStm = function (stm) {
@@ -1087,6 +1782,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
     this.cache.set(key, null); // cycle guard
     let val = null;
     try { val = new Parser(this.buf, off, this).parseObject(); } catch (e) { val = null; }
+    if (val instanceof PStream) {
+      val._num = parseInt(key, 10);
+      val._gen = this.gens.get(key) || 0;
+    }
     this.cache.set(key, val);
     return val;
   };
@@ -1108,6 +1807,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
   PDFDocument.prototype.decodeStream = function (stm) {
     if (stm._decoded) return stm._decoded;
     let data = stm.raw;
+    /* Decryption comes before any filter: on disk the bytes are encrypted
+       first and compressed second, so they must be undone in that order.
+       Cross-reference streams are never encrypted. */
+    if (this.crypt && stm._num !== undefined
+      && !(this._xrefStreams && this._xrefStreams.has(stm))) {
+      try { data = this.crypt.decryptStream(data, stm._num, stm._gen); } catch (e) { /* leave as is */ }
+    }
     let filters = this.resolve(stm.dict.Filter) || this.resolve(stm.dict.F);
     if (filters instanceof Name) filters = [filters];
     if (!Array.isArray(filters)) filters = filters ? [filters] : [];
@@ -1605,16 +2311,28 @@ button { font: inherit; color: inherit; cursor: pointer; }
   }
 
   /** Extract structured text. Returns { pages:[{index,lines,width,height,text}], meta } */
-  FV.parsePDF = function (bytes) {
-    const doc = new PDFDocument(bytes);
+  FV.parsePDF = function (bytes, password) {
+    const doc = new PDFDocument(bytes, password);
     const pages = doc.getPages();
-    const out = { pages: [], encrypted: doc.encrypted, meta: {} };
+    const out = {
+      pages: [], encrypted: doc.encrypted, meta: {},
+      locked: doc.locked,
+      decrypted: !!doc.crypt,
+      cryptMethod: doc.cryptMethod
+    };
     // Document info
     for (let i = doc.trailers.length - 1; i >= 0; i--) {
+      const infoRef = doc.trailers[i].Info;
       const info = doc.dget(doc.trailers[i], 'Info');
       if (info) {
+        const infoNum = infoRef instanceof Ref ? infoRef.num : 0;
+        const infoGen = infoRef instanceof Ref ? infoRef.gen : 0;
         const g = function (k) {
-          const v = doc.dget(info, k);
+          let v = doc.dget(info, k);
+          /* Strings are encrypted with the object that contains them. */
+          if (v instanceof Uint8Array && doc.crypt && infoNum) {
+            try { v = doc.crypt.decryptString(v, infoNum, infoGen); } catch (e) { /* keep raw */ }
+          }
           return v instanceof Uint8Array ? decodePdfText(v) : (typeof v === 'string' ? v : null);
         };
         out.meta.title = g('Title') || out.meta.title;
@@ -3443,6 +4161,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
       noVoicesBody: 'Este navegador não ofereceu vozes de síntese de fala. Em geral funciona no Chrome, Edge e Safari.',
       noVoiceForLang: 'Sem voz instalada para este idioma',
       drmBlocked: 'O texto deste livro está cifrado por DRM da loja que o vendeu. O FolioVox não remove proteção — leia no aplicativo da loja, ou use uma edição sem DRM (muitas editoras vendem assim).',
+      pdfPasswordTitle: 'Este PDF pede senha',
+      pdfPasswordBody: 'Este arquivo está protegido por uma senha de leitura. Se você tem a senha, digite-a abaixo. O FolioVox não tenta descobrir senha nenhuma.',
+      pdfPasswordLabel: 'Senha do arquivo',
+      pdfPasswordOpen: 'Abrir livro',
+      pdfPasswordWrong: 'A senha não abriu este arquivo. Confira e tente de novo.',
       unsupportedFormat: 'Formato não suportado',
       fileTooLarge: 'Arquivo grande demais',
       duplicateFile: 'Este documento já está na biblioteca',
@@ -3591,6 +4314,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
       noVoicesBody: 'Dieser Browser hat keine Sprachsynthese-Stimmen angeboten. In Chrome, Edge und Safari funktioniert es meist.',
       noVoiceForLang: 'Keine Stimme für diese Sprache installiert',
       drmBlocked: 'Der Text dieses Buches ist durch DRM des Händlers verschlüsselt. FolioVox entfernt keinen Kopierschutz — bitte in der App des Händlers lesen oder eine DRM-freie Ausgabe verwenden.',
+      pdfPasswordTitle: 'Dieses PDF verlangt ein Kennwort',
+      pdfPasswordBody: 'Diese Datei ist mit einem Lesekennwort geschützt. Wenn Sie es kennen, geben Sie es unten ein. FolioVox versucht nie, ein Kennwort zu erraten.',
+      pdfPasswordLabel: 'Kennwort der Datei',
+      pdfPasswordOpen: 'Buch öffnen',
+      pdfPasswordWrong: 'Mit diesem Kennwort ließ sich die Datei nicht öffnen. Bitte prüfen und erneut versuchen.',
       unsupportedFormat: 'Format nicht unterstützt',
       fileTooLarge: 'Datei zu groß',
       duplicateFile: 'Dieses Dokument ist bereits in der Bibliothek',
@@ -3739,6 +4467,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
       noVoicesBody: 'This browser offered no speech-synthesis voices. Chrome, Edge and Safari usually work.',
       noVoiceForLang: 'No voice installed for this language',
       drmBlocked: 'This book\'s text is encrypted by the store\'s DRM. FolioVox does not remove protection — read it in the store\'s own app, or use a DRM-free edition.',
+      pdfPasswordTitle: 'This PDF asks for a password',
+      pdfPasswordBody: 'This file is protected with a reading password. If you have it, type it below. FolioVox never tries to work a password out.',
+      pdfPasswordLabel: 'File password',
+      pdfPasswordOpen: 'Open book',
+      pdfPasswordWrong: 'That password did not open this file. Please check it and try again.',
       unsupportedFormat: 'Format not supported',
       fileTooLarge: 'File too large',
       duplicateFile: 'This document is already in the library',
@@ -4934,17 +5667,22 @@ button { font: inherit; color: inherit; cursor: pointer; }
      * Parse a file into { pages, meta, kind, needsOcr }.
      * @param bytes Uint8Array of the original file (never mutated)
      */
-    parse: async function (bytes, name, onProgress) {
+    parse: async function (bytes, name, onProgress, password) {
       const report = function (stage, pct) { if (onProgress) onProgress({ stage: stage, percent: pct }); };
       if (bytes.length > MAX_BYTES) { const e = new Error('FILE_TOO_LARGE'); e.code = 'FILE_TOO_LARGE'; throw e; }
       const kind = sniff(bytes, name);
       report('stReading', 5);
 
       if (kind === 'pdf') {
-        const res = FV.parsePDF(bytes);
-        if (res.encrypted) {
-          const hasText = res.pages.some(function (p) { return p.text && p.text.trim().length > 20; });
-          if (!hasText) { const e = new Error('DRM_PROTECTED'); e.code = 'DRM_PROTECTED'; throw e; }
+        const res = FV.parsePDF(bytes, password);
+        /* An encrypted PDF whose password is empty opens like any other, which
+           is what nearly all of them are. One that truly needs a password is
+           not forced: the reader is asked for it. */
+        if (res.locked) {
+          const e = new Error('PDF_PASSWORD_REQUIRED');
+          e.code = 'PDF_PASSWORD_REQUIRED';
+          e.wrongPassword = !!password;
+          throw e;
         }
         const chars = res.pages.reduce(function (a, p) { return a + (p.text || '').length; }, 0);
         const needsOcr = chars < Math.max(60, res.pages.length * 25);
@@ -6064,7 +6802,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   }
 
   /* -------------------------------------------------------------- import */
-  async function importFile(file) {
+  async function importFile(file, password) {
     App.busy = { stage: 'stReading', percent: 2, name: file.name };
     go('processing');
     try {
@@ -6076,7 +6814,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
       const parsed = await FV.Importer.parse(buf, file.name, function (p) {
         App.busy = Object.assign({}, App.busy, p);
         renderProcessing();
-      });
+      }, password);
 
       if (parsed.needsOcr) {
         if (parsed.kind === 'image') {
@@ -6096,6 +6834,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
     } catch (e) {
       App.busy = null;
       const code = e && e.code;
+      if (code === 'PDF_PASSWORD_REQUIRED') {
+        App.pendingImport = { file: file };
+        replace('pdfpassword', { wrong: !!e.wrongPassword, name: file.name });
+        return;
+      }
       replace('error', {
         message: code === 'DRM_PROTECTED' ? t('drmBlocked')
           : code === 'FILE_TOO_LARGE' ? t('fileTooLarge')
@@ -6328,6 +7071,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
       case 'dataexport': html = viewDataExport(); break;
       case 'ownersetup': html = viewOwnerSetup(); break;
       case 'health': html = viewHealth(); break;
+      case 'pdfpassword': html = viewPdfPassword(); break;
       case 'error': html = viewError(); break;
       default: html = viewLibrary();
     }
@@ -7214,6 +7958,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
     return html;
   }
 
+  function viewPdfPassword() {
+    const p = App.params || {};
+    return header(t('pdfPasswordTitle')) + '<div class="fv-pad">' +
+      (p.wrong
+        ? '<div class="fv-note fv-note--danger"><strong>' + esc(t('pdfPasswordWrong')) + '</strong></div>'
+        : '<p class="fv-hint">' + esc(t('pdfPasswordBody')) + '</p>') +
+      (p.name ? '<p class="fv-hint"><small>' + esc(p.name) + '</small></p>' : '') +
+      '<label class="fv-label" for="fv-pdf-password">' + esc(t('pdfPasswordLabel')) + '</label>' +
+      '<input class="fv-input" id="fv-pdf-password" type="password" autocomplete="off" ' +
+      'aria-label="' + esc(t('pdfPasswordLabel')) + '">' +
+      '<button class="fv-btn fv-btn--primary fv-btn--wide" data-action="pdf-password-open">' + esc(t('pdfPasswordOpen')) + '</button>' +
+      '<button class="fv-btn fv-btn--wide" data-action="tab" data-view="library">' + esc(t('cancel')) + '</button>' +
+      '</div>';
+  }
+
   function viewError() {
     return header(t('errorTitle')) + '<div class="fv-pad">' +
       '<div class="fv-note fv-note--danger"><strong>' + esc(App.params.message || t('errorBody')) + '</strong>' +
@@ -7516,6 +8275,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
           toast(t('done'), 'ok');
         }
         break;
+      case 'pdf-password-open': {
+        const input = document.getElementById('fv-pdf-password');
+        const pw = input ? input.value : '';
+        const pending = App.pendingImport;
+        if (!pending || !pending.file) { replace('library'); break; }
+        if (!pw) { toast(t('pdfPasswordLabel'), 'warn'); break; }
+        await importFile(pending.file, pw);
+        break;
+      }
       case 'test-server': {
         App.prefs.serverUrl = document.getElementById('fv-server').value.trim();
         App.prefs.serverToken = document.getElementById('fv-server-token').value.trim();
