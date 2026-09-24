@@ -3247,7 +3247,136 @@ button { font: inherit; color: inherit; cursor: pointer; }
     ]
   };
 
-  /* Bible book abbreviations → full spoken names. */
+  /* ------------------------------------------------------ scripture refs --
+   * The 66 books, with the abbreviations actually used in Portuguese, German
+   * and English writing. `n` marks the books that come in numbered volumes,
+   * which decides how the ordinal is spoken: in Portuguese a letter is
+   * feminine ("primeira Coríntios") and a book of history masculine
+   * ("primeiro Samuel"); in German a Brief is masculine ("Erster Korinther")
+   * and a Buch neuter ("Erstes Samuel"); English says First either way.
+   *
+   * Columns: Portuguese name, German name, English name, kind, then the
+   * abbreviations per language. Digits in an abbreviation are dropped — the
+   * volume number is matched separately, so "1Co" and "2 Co" share one entry.
+   */
+  const BIBLE_TABLE = [
+    ['Gênesis', 'Genesis', 'Genesis', '', 'gn gen', 'gen', 'gen ge'],
+    ['Êxodo', 'Exodus', 'Exodus', '', 'ex exo', 'ex exod', 'exod ex'],
+    ['Levítico', 'Levitikus', 'Leviticus', '', 'lv lev', 'lev', 'lev lv'],
+    ['Números', 'Numeri', 'Numbers', '', 'nm num', 'num', 'num nu'],
+    ['Deuteronômio', 'Deuteronomium', 'Deuteronomy', '', 'dt deut', 'dtn dt', 'deut dt'],
+    ['Josué', 'Josua', 'Joshua', '', 'js jos', 'jos', 'josh jos'],
+    ['Juízes', 'Richter', 'Judges', '', 'jz juiz juizes', 'ri richt', 'judg jdg'],
+    ['Rute', 'Rut', 'Ruth', '', 'rt rute', 'rut', 'ruth'],
+    ['Samuel', 'Samuel', 'Samuel', 'book', 'sm sam', 'sam', 'sam'],
+    ['Reis', 'Könige', 'Kings', 'book', 'rs reis', 'kon koen konige koenige', 'kgs kings'],
+    ['Crônicas', 'Chronik', 'Chronicles', 'book', 'cr cron cronicas', 'chr chronik', 'chr chron'],
+    ['Esdras', 'Esra', 'Ezra', '', 'ed esd esdras', 'esr esra', 'ezra'],
+    ['Neemias', 'Nehemia', 'Nehemiah', '', 'ne nee neemias', 'neh', 'neh'],
+    ['Ester', 'Ester', 'Esther', '', 'et est ester', 'est ester', 'esth'],
+    ['Jó', 'Hiob', 'Job', '', 'job', 'hi hiob ijob', 'job'],
+    ['Salmos', 'Psalm', 'Psalm', '', 'sl slm salmo salmos', 'ps psalm', 'ps psa psalm'],
+    ['Provérbios', 'Sprüche', 'Proverbs', '', 'pv prov proverbios', 'spr spruche sprueche', 'prov prv'],
+    ['Eclesiastes', 'Prediger', 'Ecclesiastes', '', 'ec ecl eclesiastes', 'pred prediger koh kohelet', 'eccl eccles'],
+    ['Cantares', 'Hoheslied', 'Song of Songs', '', 'ct cant cantares canticos', 'hld hohelied hoheslied', 'song sos'],
+    ['Isaías', 'Jesaja', 'Isaiah', '', 'is isa isaias', 'jes jesaja', 'isa'],
+    ['Jeremias', 'Jeremia', 'Jeremiah', '', 'jr jer jeremias', 'jer', 'jer'],
+    ['Lamentações', 'Klagelieder', 'Lamentations', '', 'lm lam lamentacoes', 'klgl klagelieder', 'lam'],
+    ['Ezequiel', 'Hesekiel', 'Ezekiel', '', 'ez ezeq ezequiel', 'hes hesekiel ez ezech', 'ezek eze'],
+    ['Daniel', 'Daniel', 'Daniel', '', 'dn dan daniel', 'dan', 'dan'],
+    ['Oseias', 'Hosea', 'Hosea', '', 'os oseias', 'hos hosea', 'hos'],
+    ['Joel', 'Joel', 'Joel', '', 'jl joel', 'joel', 'joel'],
+    ['Amós', 'Amos', 'Amos', '', 'am amos', 'am amos', 'amos am'],
+    ['Obadias', 'Obadja', 'Obadiah', '', 'ob obd obadias', 'obd obadja', 'obad'],
+    ['Jonas', 'Jona', 'Jonah', '', 'jn jon jonas', 'jona', 'jonah jon'],
+    ['Miqueias', 'Micha', 'Micah', '', 'mq miq miqueias', 'mi micha', 'mic'],
+    ['Naum', 'Nahum', 'Nahum', '', 'na naum', 'nah nahum', 'nah'],
+    ['Habacuque', 'Habakuk', 'Habakkuk', '', 'hc hab habacuque', 'hab habakuk', 'hab'],
+    ['Sofonias', 'Zefanja', 'Zephaniah', '', 'sf sof sofonias', 'zef zefanja', 'zeph'],
+    ['Ageu', 'Haggai', 'Haggai', '', 'ag ageu', 'hag haggai', 'hag'],
+    ['Zacarias', 'Sacharja', 'Zechariah', '', 'zc zac zacarias', 'sach sacharja', 'zech'],
+    ['Malaquias', 'Maleachi', 'Malachi', '', 'ml mal malaquias', 'mal maleachi', 'mal'],
+    ['Mateus', 'Matthäus', 'Matthew', '', 'mt mat mateus', 'mt mat matt matthaus matthaeus', 'matt mt'],
+    ['Marcos', 'Markus', 'Mark', '', 'mc mar marcos', 'mk mark markus', 'mark mk'],
+    ['Lucas', 'Lukas', 'Luke', '', 'lc luc lucas', 'lk luk lukas', 'luke lk'],
+    ['João', 'Johannes', 'John', 'letter', 'jo joao', 'joh johannes', 'john jn'],
+    ['Atos', 'Apostelgeschichte', 'Acts', '', 'at atos', 'apg apostelgeschichte', 'acts'],
+    ['Romanos', 'Römer', 'Romans', '', 'rm rom romanos', 'rom romer roemer', 'rom'],
+    ['Coríntios', 'Korinther', 'Corinthians', 'letter', 'co cor corintios', 'kor korinther', 'cor'],
+    ['Gálatas', 'Galater', 'Galatians', '', 'gl gal galatas', 'gal galater', 'gal'],
+    ['Efésios', 'Epheser', 'Ephesians', '', 'ef efesios', 'eph epheser', 'eph'],
+    ['Filipenses', 'Philipper', 'Philippians', '', 'fp fil filipenses', 'phil philipper', 'phil php'],
+    ['Colossenses', 'Kolosser', 'Colossians', '', 'cl col colossenses', 'kol kolosser', 'col'],
+    ['Tessalonicenses', 'Thessalonicher', 'Thessalonians', 'letter', 'ts tes tess tessalonicenses', 'thess thessalonicher', 'thess'],
+    ['Timóteo', 'Timotheus', 'Timothy', 'letter', 'tm tim timoteo', 'tim timotheus', 'tim'],
+    ['Tito', 'Titus', 'Titus', '', 'tt tito', 'tit titus', 'titus tit'],
+    ['Filemom', 'Philemon', 'Philemon', '', 'fm flm filemom', 'phlm philem philemon', 'phlm philem'],
+    ['Hebreus', 'Hebräer', 'Hebrews', '', 'hb heb hebreus', 'hebr hebraer hebraeer', 'heb'],
+    ['Tiago', 'Jakobus', 'James', '', 'tg tia tiago', 'jak jakobus', 'jas jam'],
+    ['Pedro', 'Petrus', 'Peter', 'letter', 'pe ped pedro', 'petr petrus', 'pet'],
+    ['Judas', 'Judas', 'Jude', '', 'jd judas', 'jud judas', 'jude'],
+    ['Apocalipse', 'Offenbarung', 'Revelation', '', 'ap apoc apocalipse', 'offb offenbarung', 'rev']
+  ];
+
+  /* Abbreviations that are also ordinary words, so they only count as a
+     reference when a verse follows: "os 3 homens" is not Hosea 3. */
+  const AMBIGUOUS = {
+    'pt-BR': new Set(['os', 'na', 'am', 'is', 'ex', 'ne', 'ed', 'ct', 'at', 'et', 'ag']),
+    'de-DE': new Set(['am', 'hab', 'mi', 'ri', 'est', 'war', 'mal', 'ex']),
+    'en-US': new Set(['is', 'am', 'acts', 'job', 'mark', 'rev', 'num', 'song', 'ge', 'nu'])
+  };
+
+  const LANG_COL = { 'pt-BR': 0, 'de-DE': 1, 'en-US': 2 };
+
+  /**
+   * Two indexes per language: one keyed by the abbreviation exactly as
+   * written, accents and all, and one by the accent-free form. The accented
+   * one is consulted first, because stripping accents collides "Jó" (Job)
+   * with "Jo" (João) — two different books, one letter apart.
+   */
+  const BOOK_INDEX = { exact: {}, loose: {} };
+  (function () {
+    for (const lang of ['pt-BR', 'de-DE', 'en-US']) {
+      BOOK_INDEX.exact[lang] = Object.create(null);
+      BOOK_INDEX.loose[lang] = Object.create(null);
+    }
+    for (const row of BIBLE_TABLE) {
+      const names = [row[0], row[1], row[2]];
+      const kind = row[3];
+      for (const lang of ['pt-BR', 'de-DE', 'en-US']) {
+        const col = LANG_COL[lang];
+        const entry = { name: names[col], kind: kind };
+        const add = function (raw) {
+          const exact = String(raw).toLowerCase().replace(/[.\s\d]/g, '');
+          if (exact.length >= 2 && !(exact in BOOK_INDEX.exact[lang])) BOOK_INDEX.exact[lang][exact] = entry;
+          const k = normKey(raw);
+          if (k.length >= 2 && !(k in BOOK_INDEX.loose[lang])) BOOK_INDEX.loose[lang][k] = entry;
+        };
+        add(names[col]);                              // the full name, as written
+        for (const a of row[4 + col].split(' ')) add(a);
+      }
+    }
+    /* "Jo" unaccented is John in Portuguese writing; Job is always "Jó". The
+       loose index reached Job first only because it comes earlier in the
+       canon, so the intended book is restored here. */
+    const joao = BOOK_INDEX.loose['pt-BR']['joao'];
+    if (joao) BOOK_INDEX.loose['pt-BR']['jo'] = joao;
+  })();
+
+  /** Lowercase, strip accents, drop digits, dots and spaces. */
+  function normKey(s) {
+    let t = String(s).toLowerCase();
+    if (t.normalize) t = t.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    return t.replace(/[^a-z]/g, '');
+  }
+
+  const ORDINAL_WORD = {
+    'pt-BR': { letter: ['primeira', 'segunda', 'terceira'], book: ['primeiro', 'segundo', 'terceiro'] },
+    'de-DE': { letter: ['Erster', 'Zweiter', 'Dritter'], book: ['Erstes', 'Zweites', 'Drittes'] },
+    'en-US': { letter: ['First', 'Second', 'Third'], book: ['First', 'Second', 'Third'] }
+  };
+
+  /* Kept for compatibility with anything that read the old table. */
   const BIBLE_BOOKS = {
     'pt-BR': { gn: 'Gênesis', ex: 'Êxodo', lv: 'Levítico', nm: 'Números', dt: 'Deuteronômio', js: 'Josué', jz: 'Juízes', rt: 'Rute', sl: 'Salmos', pv: 'Provérbios', ec: 'Eclesiastes', is: 'Isaías', jr: 'Jeremias', ez: 'Ezequiel', dn: 'Daniel', os: 'Oseias', jl: 'Joel', am: 'Amós', jn: 'Jonas', mq: 'Miqueias', hc: 'Habacuque', ag: 'Ageu', zc: 'Zacarias', ml: 'Malaquias', mt: 'Mateus', mc: 'Marcos', lc: 'Lucas', jo: 'João', at: 'Atos', rm: 'Romanos', gl: 'Gálatas', ef: 'Efésios', fp: 'Filipenses', cl: 'Colossenses', tt: 'Tito', fm: 'Filemom', hb: 'Hebreus', tg: 'Tiago', jd: 'Judas', ap: 'Apocalipse' },
     'de-DE': { gen: 'Genesis', ex: 'Exodus', lev: 'Levitikus', num: 'Numeri', dtn: 'Deuteronomium', dt: 'Deuteronomium', jos: 'Josua', ri: 'Richter', ps: 'Psalm', spr: 'Sprüche', pred: 'Prediger', jes: 'Jesaja', jer: 'Jeremia', ez: 'Ezechiel', dan: 'Daniel', hos: 'Hosea', joel: 'Joel', am: 'Amos', jona: 'Jona', mi: 'Micha', hab: 'Habakuk', sach: 'Sacharja', mal: 'Maleachi', mt: 'Matthäus', mk: 'Markus', lk: 'Lukas', joh: 'Johannes', apg: 'Apostelgeschichte', röm: 'Römer', roem: 'Römer', gal: 'Galater', eph: 'Epheser', phil: 'Philipper', kol: 'Kolosser', tit: 'Titus', phlm: 'Philemon', hebr: 'Hebräer', jak: 'Jakobus', jud: 'Judas', offb: 'Offenbarung' },
@@ -3256,22 +3385,118 @@ button { font: inherit; color: inherit; cursor: pointer; }
   const CHAPTER_WORD = { 'pt-BR': 'capítulo', 'de-DE': 'Kapitel', 'en-US': 'chapter' };
   const VERSE_WORD = { 'pt-BR': 'versículo', 'de-DE': 'Vers', 'en-US': 'verse' };
 
+  const ROMAN = { i: 1, ii: 2, iii: 3 };
+
+  /**
+   * Expand a scripture reference into the way a person reads it aloud.
+   *
+   * Handles the volume number in any of its written forms (1, 1ª, I), the
+   * chapter–verse separator in any of its three (`:` `.` `,`), a verse range,
+   * a short list of verses, the "and following" marks (ss, ff), and a
+   * chapter with no verse at all. Anything whose book is not recognised is
+   * returned exactly as written.
+   *
+   *   1 Co 12.18-21  → primeira Coríntios doze, dezoito a vinte e um
+   *   II Tm 3,16     → segunda Timóteo três, dezesseis
+   *   1. Kor 13,4-7  → Erster Korinther dreizehn vier bis sieben
+   *   Sl 23          → Salmos vinte e três
+   */
   function expandBibleRefs(text, lang) {
     const L = baseLang(lang);
-    const books = BIBLE_BOOKS[L];
-    // e.g. "Jo 3:16", "Joh 3,16", "1 Cor 13:4-7", "Sl 23"
-    return text.replace(/\b(\d\s?)?([A-Za-zÀ-ÿ]{2,6})\.?\s?(\d{1,3})[:,](\d{1,3})(?:\s?[-–]\s?(\d{1,3}))?/g, function (m, pre, book, ch, v1, v2) {
-      const key = book.toLowerCase().replace(/\./g, '');
-      const full = books[key];
-      if (!full) return m;
-      const ordinalPrefix = pre ? (L === 'pt-BR' ? (pre.trim() === '1' ? 'primeiro ' : pre.trim() === '2' ? 'segundo ' : 'terceiro ') :
-        L === 'de-DE' ? (pre.trim() === '1' ? 'erster ' : pre.trim() === '2' ? 'zweiter ' : 'dritter ') :
-          (pre.trim() === '1' ? 'first ' : pre.trim() === '2' ? 'second ' : 'third ')) : '';
-      const sep = L === 'pt-BR' ? ', ' : ' ';
-      let out = ordinalPrefix + full + ' ' + FV.numberToWords(parseInt(ch, 10), lang) + sep + FV.numberToWords(parseInt(v1, 10), lang);
-      if (v2) out += (L === 'de-DE' ? ' bis ' : L === 'pt-BR' ? ' a ' : ' to ') + FV.numberToWords(parseInt(v2, 10), lang);
-      return out;
-    });
+    const exact = BOOK_INDEX.exact[L], loose = BOOK_INDEX.loose[L];
+    if (!loose) return text;
+    const ambiguous = AMBIGUOUS[L] || new Set();
+    const words = ORDINAL_WORD[L];
+
+    const RE = new RegExp(
+      '(^|[^\\p{L}\\p{N}])'                       // 1 left edge
+      + '(?:([123])\\s*[ªº°.]?\\s*|(I{1,3})\\s*\\.?\\s+)?'  // 2 digit volume, 3 roman volume
+      + '([\\p{L}]{2,20})\\.?'                    // 4 book
+      + '[\\s\\u00a0]*'
+      + '(\\d{1,3})'                              // 5 chapter
+      + '(?:\\s*[.:,]\\s*(\\d{1,3})'              // 6 first verse
+      + '(?:\\s*[-–—]\\s*(\\d{1,3}))?'            // 7 last verse of a range
+      + '((?:\\s*[.,]\\s*\\d{1,3})*)'             // 8 further verses in a list
+      + '\\s*(ss|s|ff|f)?'                        // 9 "and following"
+      + ')?'
+      /* Not a reference if another dotted number follows: "12.03.1943" is a
+         date, and the date expander should be the one to read it. */
+      + '(?![\\p{L}\\d]|\\.\\s*\\d)',
+      'gu');
+
+    /* German Protestant writing numbers the books of Moses rather than naming
+       them — "2. Mose 20,3" is Exodus — and reads them as "Zweites Buch
+       Mose". The volume selects a different book, so this cannot go through
+       the ordinary table and is handled first, whole. */
+    if (L === 'de-DE') {
+      const BUCH = ['Erstes', 'Zweites', 'Drittes', 'Viertes', 'Fünftes'];
+      text = text.replace(/\b([1-5])\s*\.?\s*Mose\.?[\s ]*(\d{1,3})(?:\s*[.,:]\s*(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?)?(?![\p{L}\d]|\.\s*\d)/gu,
+        function (m, vol, ch, v1, v2) {
+          let r = BUCH[parseInt(vol, 10) - 1] + ' Buch Mose ' + FV.numberToWords(parseInt(ch, 10), lang);
+          if (v1) r += ' ' + FV.numberToWords(parseInt(v1, 10), lang);
+          if (v2) r += ' bis ' + FV.numberToWords(parseInt(v2, 10), lang);
+          return r;
+        });
+    }
+
+    /* Scanning is driven by hand rather than by String.replace, because a
+       failed candidate must not swallow the text it looked at. "Veja 1 Co
+       12.18" first offers the engine book="Veja", chapter=1; when that is
+       rejected the volume number has to be available again to the real
+       reference that starts one character later. */
+    let out = '';
+    let last = 0;
+    let m;
+    RE.lastIndex = 0;
+    while ((m = RE.exec(text)) !== null) {
+      const replaced = expandOne(m);
+      if (replaced === null) {
+        /* Resume just after the left edge so the next start is not skipped. */
+        RE.lastIndex = m.index + (m[1] ? m[1].length : 0) + 1;
+        continue;
+      }
+      out += text.slice(last, m.index) + replaced;
+      last = m.index + m[0].length;
+    }
+    return out + text.slice(last);
+
+    function expandOne(m) {
+      const lead = m[1], dig = m[2], roman = m[3], book = m[4];
+      const ch = m[5], v1 = m[6], v2 = m[7], more = m[8], follow = m[9];
+      const key = normKey(book);
+      const entry = exact[String(book).toLowerCase().replace(/[.\s\d]/g, '')] || loose[key];
+      if (!entry) return null;
+      /* A word that is also an abbreviation only counts with a verse. */
+      if (!v1 && ambiguous.has(key)) return null;
+      /* A volume number on a book that has none is not a reference. */
+      const volume = dig ? parseInt(dig, 10) : (roman ? ROMAN[roman.toLowerCase()] : 0);
+      if (volume && !entry.kind) return null;
+      /* Books that come in volumes are rarely cited without one, but John is
+         also a gospel, so an absent number is simply left unspoken. */
+
+      const n = function (v) { return FV.numberToWords(parseInt(v, 10), lang); };
+      /* If the author wrote the book out in full, keep their wording: someone
+         who writes "Salmo 133" means the singular, and should not hear
+         "Salmos". Only an abbreviation is replaced by the canonical name. */
+      const canon = normKey(entry.name);
+      const writtenOut = key.length >= 5 && Math.abs(key.length - canon.length) <= 2
+        && (key.indexOf(canon.slice(0, 5)) === 0 || canon.indexOf(key.slice(0, 5)) === 0);
+      const spokenName = writtenOut ? String(book).replace(/\.$/, '') : entry.name;
+
+      let out = '';
+      if (volume) out += words[entry.kind][volume - 1] + ' ';
+      out += spokenName + ' ' + n(ch);
+      if (v1) {
+        out += (L === 'pt-BR' ? ', ' : ' ') + n(v1);
+        if (v2) out += (L === 'de-DE' ? ' bis ' : L === 'pt-BR' ? ' a ' : ' to ') + n(v2);
+        if (more) {
+          const rest = more.match(/\d{1,3}/g) || [];
+          for (const r of rest) out += (L === 'de-DE' ? ' und ' : L === 'pt-BR' ? ' e ' : ' and ') + n(r);
+        }
+        if (follow) out += L === 'pt-BR' ? ' e seguintes' : L === 'de-DE' ? ' und folgende' : ' and following';
+      }
+      return lead + out;
+    }
   }
 
   const MONTHS = {
@@ -3314,13 +3539,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
       return mon + ' ' + FV.ordinalToWords(day, L) + ', ' + FV.yearToWords(parseInt(y, 10), L);
     });
 
-    // times 14:30
-    s = s.replace(/\b(\d{1,2}):(\d{2})\b(?!\d)/g, function (m, h, mi) {
+    // times 14:30 — in German the word "Uhr" belongs inside the reading, so
+    // an "Uhr" the author already wrote is absorbed instead of repeated.
+    s = s.replace(/\b(\d{1,2}):(\d{2})\b(?!\d)(\s+Uhr\b)?/g, function (m, h, mi, uhr) {
       const H = parseInt(h, 10), M = parseInt(mi, 10);
       if (H > 23 || M > 59) return m;
+      const tail = L === 'de-DE' ? '' : (uhr || '');
       if (L === 'de-DE') return FV.numberToWords(H, L) + ' Uhr' + (M ? ' ' + FV.numberToWords(M, L) : '');
-      if (L === 'pt-BR') return FV.numberToWords(H, L) + (H === 1 ? ' hora' : ' horas') + (M ? ' e ' + FV.numberToWords(M, L) : '');
-      return FV.numberToWords(H, L) + ' ' + (M ? (M < 10 ? 'oh ' : '') + FV.numberToWords(M, L) : "o'clock");
+      if (L === 'pt-BR') return FV.numberToWords(H, L) + (H === 1 ? ' hora' : ' horas') + (M ? ' e ' + FV.numberToWords(M, L) : '') + tail;
+      return FV.numberToWords(H, L) + ' ' + (M ? (M < 10 ? 'oh ' : '') + FV.numberToWords(M, L) : "o'clock") + tail;
     });
 
     // German ordinals "1." before a noun → "erste"
