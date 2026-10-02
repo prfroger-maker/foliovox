@@ -876,7 +876,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
    * removed when it is well formed; a malformed tail is left alone rather than
    * throwing, because a truncated stream should still yield the text it has.
    */
-  FV.aesDecryptCBC = function (key, data, leadingIv) {
+  FV.aesDecryptCBC = function (key, data, leadingIv, keepPadding) {
     let iv, body;
     if (leadingIv === false) { iv = new Uint8Array(16); body = data; }
     else { iv = data.subarray(0, 16); body = data.subarray(16); }
@@ -894,6 +894,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
       for (let i = 0; i < 16; i++) out[off + i] = block[i] ^ prev[i];
       prev.set(cipher);
     }
+    /* PDF always pads, so removing it is right there. Raw callers — and the
+       tests that compare against unpadded plaintext — ask to keep it, because
+       random data can end in a byte that merely looks like padding. */
+    if (keepPadding) return out;
     const pad = out[n - 1];
     if (pad >= 1 && pad <= 16 && pad <= n) {
       let valid = true;
@@ -4312,6 +4316,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
       modeOriginal: 'Áudio original', modeTranslated: 'Áudio traduzido',
       modeBilingual: 'Bilíngue alternado', modeSideBySide: 'Lado a lado', modeReadAlong: 'Ler acompanhando',
       translateTo: 'Traduzir para', translationOff: 'Sem tradução',
+      quickTranslate: 'Traduzir e ouvir',
+      quickTranslateBody: 'Cole um texto e ouça como fica no outro idioma, sem precisar criar um livro.',
+      quickSource: 'Texto de origem',
+      quickPlaceholder: 'Cole ou escreva aqui, em português, alemão ou inglês…',
+      translateAction: 'Traduzir',
+      hearOriginal: 'Ouvir o original',
+      hearTranslation: 'Ouvir a tradução',
+      quickSaveToLibrary: 'Guardar na biblioteca',
+      quickSameLang: 'O texto já está nesse idioma. Escolha outro destino.',
       translating: 'Traduzindo…', translationFailed: 'Não consegui traduzir agora',
       translationNeedsNet: 'A tradução precisa de internet.',
       narrationStyle: 'Estilo de narração',
@@ -4465,6 +4478,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
       modeOriginal: 'Original-Audio', modeTranslated: 'Übersetztes Audio',
       modeBilingual: 'Zweisprachig abwechselnd', modeSideBySide: 'Nebeneinander', modeReadAlong: 'Mitlesen',
       translateTo: 'Übersetzen nach', translationOff: 'Ohne Übersetzung',
+      quickTranslate: 'Übersetzen und hören',
+      quickTranslateBody: 'Text einfügen und hören, wie er in der anderen Sprache klingt — ohne ein Buch anzulegen.',
+      quickSource: 'Ausgangstext',
+      quickPlaceholder: 'Hier einfügen oder schreiben, auf Portugiesisch, Deutsch oder Englisch…',
+      translateAction: 'Übersetzen',
+      hearOriginal: 'Original anhören',
+      hearTranslation: 'Übersetzung anhören',
+      quickSaveToLibrary: 'In der Bibliothek speichern',
+      quickSameLang: 'Der Text ist bereits in dieser Sprache. Bitte eine andere Zielsprache wählen.',
       translating: 'Wird übersetzt…', translationFailed: 'Übersetzung gerade nicht möglich',
       translationNeedsNet: 'Die Übersetzung benötigt Internet.',
       narrationStyle: 'Narrationsstil',
@@ -4618,6 +4640,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
       modeOriginal: 'Original audio', modeTranslated: 'Translated audio',
       modeBilingual: 'Bilingual alternating', modeSideBySide: 'Side by side', modeReadAlong: 'Read along',
       translateTo: 'Translate to', translationOff: 'No translation',
+      quickTranslate: 'Translate and listen',
+      quickTranslateBody: 'Paste a passage and hear how it sounds in the other language, without making a book of it.',
+      quickSource: 'Source text',
+      quickPlaceholder: 'Paste or type here, in Portuguese, German or English…',
+      translateAction: 'Translate',
+      hearOriginal: 'Hear the original',
+      hearTranslation: 'Hear the translation',
+      quickSaveToLibrary: 'Save to library',
+      quickSameLang: 'The text is already in that language. Choose a different target.',
       translating: 'Translating…', translationFailed: 'Could not translate right now',
       translationNeedsNet: 'Translation needs an internet connection.',
       narrationStyle: 'Narration style',
@@ -5266,12 +5297,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
     pick: function (lang, gender) {
       const list = Voices.forLang(lang);
       if (!list.length) return null;
-      if (gender) {
-        const g = list.filter(function (v) { return v.gender === gender; });
-        if (g.length) return g[0];
-      }
-      const local = list.filter(function (v) { return v.localService; });
-      return (local[0] || list[0]);   // premium voices already sort first
+      const byGender = gender ? list.filter(function (v) { return v.gender === gender; }) : [];
+      const pool = byGender.length ? byGender : list;
+      /* A configured server voice is the reason the reader set one up, so it
+         wins. Preferring `localService` here meant any device voice beat it,
+         and the book was read by the phone — which is also why a language the
+         device has no voice for came out mispronounced. */
+      const prem = pool.filter(function (v) { return v.premium; });
+      if (prem.length) return prem[0];
+      const local = pool.filter(function (v) { return v.localService; });
+      return (local[0] || pool[0]);
     },
 
     /** Distinct voices for casting: prefer different underlying voices. */
@@ -5445,11 +5480,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
       id: 'foliovox',
       needsKey: false,
       translate: async function (text, from, to, opts) {
-        const base = (opts && opts.serverUrl || '').replace(/\/+$/, '');
+        const url = (opts && opts.serverUrl) || (FV.Premium && FV.Premium.serverUrl) || '';
+        const base = url.replace(/\/+$/, '');
         if (!base) { const e = new Error('PREMIUM_NOT_CONFIGURED'); e.code = 'PREMIUM_NOT_CONFIGURED'; throw e; }
+        /* Every route but /health needs the owner's access token; without it
+           the server answers 401 and this provider looked simply broken. */
+        const headers = { 'Content-Type': 'application/json' };
+        const token = (opts && opts.serverToken) || (FV.Premium && FV.Premium.token) || '';
+        if (token) headers['Authorization'] = 'Bearer ' + token;
         const res = await fetch(base + '/v1/translate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: headers,
           body: JSON.stringify({ text: text, from: from, to: to, glossary: opts && opts.glossary || null })
         });
         if (!res.ok) throw new Error('FolioVox server returned ' + res.status);
@@ -5521,8 +5562,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
      * translated twice.
      */
     /** Which provider this page can actually use, resolved once. */
-    resolve: async function (preferred) {
+    resolve: async function (preferred, opts) {
       if (preferred && preferred !== 'auto') return preferred;
+      /* The owner's own server comes first when it can translate: it is the
+         reason they configured it, and it is the only provider here that
+         translates a whole paragraph in context. Resolution is not cached in
+         that case, because the server can be connected mid-session. */
+      const serverUrl = (opts && opts.serverUrl) || (FV.Premium && FV.Premium.serverUrl) || '';
+      const serverTranslates = FV.Premium && FV.Premium.status
+        && FV.Premium.status.selected && FV.Premium.status.selected.translate;
+      if (serverUrl && serverTranslates) return 'foliovox';
       if (Translator._resolved) return Translator._resolved;
       let chosen = 'mymemory';
       try { if (await providers.assistant.available()) chosen = 'assistant'; }
@@ -5534,7 +5583,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
     translateParagraph: async function (text, from, to, opts) {
       opts = opts || {};
-      const providerId = await Translator.resolve(opts.provider);
+      const providerId = await Translator.resolve(opts.provider, opts);
       const provider = providers[providerId] || providers.mymemory;
       const key = 'tr_' + providerId + '_' + to + '_' + FV.hashString(text);
 
@@ -5662,11 +5711,27 @@ button { font: inherit; color: inherit; cursor: pointer; }
      */
     recognize: async function (source, langs, onProgress) {
       const serverUrl = Ocr.serverUrl;
+      Ocr.lastServerError = null;
       if (serverUrl) {
-        try { return await Ocr._server(source, langs, serverUrl); }
-        catch (e) { /* fall back to local engine */ }
+        try {
+          const out = await Ocr._server(source, langs, serverUrl);
+          const has = out && out.lines && out.lines.some(function (l) { return l.text && l.text.trim(); });
+          if (has) return out;
+          /* A server that answers with nothing is not a success — try the
+             local engine rather than reporting an empty page. */
+          Ocr.lastServerError = 'server returned no text';
+        } catch (e) {
+          /* Remember why, so a later failure can name the real cause instead
+             of blaming the local engine. */
+          Ocr.lastServerError = (e && e.message) || 'server call failed';
+        }
       }
-      await ensureTesseract();
+      try {
+        await ensureTesseract();
+      } catch (e) {
+        if (Ocr.lastServerError) e.message = 'server: ' + Ocr.lastServerError + ' · local: ' + e.message;
+        throw e;
+      }
       const tessLangs = Array.from(new Set((langs && langs.length ? langs : ['en-US']).map(Ocr.langFor))).join('+');
       const result = await Tesseract.recognize(source, tessLangs, {
         logger: function (m) {
@@ -5712,7 +5777,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
     },
 
     serverUrl: null,
-    serverToken: null
+    serverToken: null,
+    /** Why the server leg failed, when it did. Shown in the error detail. */
+    lastServerError: null
   };
 
   /* ---------------------------------------------- page image enhancement */
@@ -7052,8 +7119,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
           return;
         }
         App.busy = null;
-        App.params = { pdfNoText: true, parsed: parsed, hash: hash, fileName: file.name };
-        replace('noTextPdf');
+        /* The parameters must travel with the navigation: `replace` resets
+           App.params, so assigning them beforehand throws them away. */
+        replace('noTextPdf', { pdfNoText: true, parsed: parsed, hash: hash, fileName: file.name });
         return;
       }
 
@@ -7145,8 +7213,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
     }
     const pages = lines.map(function (l, i) { return { index: i, lines: l.lines }; });
     App.busy = null;
-    App.params = { pages: pages, confidence: n ? Math.round(totalConf / n) : 0 };
-    replace('ocrfix');
+    /* An empty result is a failure, not a page to review: say so instead of
+       showing a blank screen with a button that cannot do anything. */
+    const anyText = pages.some(function (p) {
+      return (p.lines || []).some(function (l) { return l.text && l.text.trim(); });
+    });
+    if (!anyText) {
+      replace('error', {
+        message: t('ocrFailed'),
+        detail: 'OCR_EMPTY' + (FV.Ocr.lastServerError ? ' · ' + FV.Ocr.lastServerError : '')
+      });
+      return;
+    }
+    /* Same rule as above: pass them to `replace`, never assign and then
+       navigate — the recognised text would be wiped before it is drawn. */
+    replace('ocrfix', { pages: pages, confidence: n ? Math.round(totalConf / n) : 0 });
   }
 
   async function confirmOcrAndBuild() {
@@ -7274,6 +7355,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
       case 'library': html = viewLibrary(); break;
       case 'add': html = viewAdd(); break;
       case 'paste': html = viewPaste(); break;
+      case 'translator': html = viewTranslator(); break;
       case 'scanreview': html = viewScanReview(); break;
       case 'ocrfix': html = viewOcrFix(); break;
       case 'processing': html = viewProcessing(); break;
@@ -7489,6 +7571,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
       fileCard('fv-camera', 'voice', t('addCamera'), t('addCameraBody')) +
       fileCard('fv-images', 'library', t('addGallery'), t('addGalleryBody')) +
       addCard('go-paste', 'note', t('addPaste'), t('addPasteBody')) +
+      addCard('go-translator', 'lang', t('quickTranslate'), t('quickTranslateBody')) +
       '<p class="fv-fine">' + esc(t('rightsNotice')) + '</p>' +
       '<input type="file" id="fv-file" class="fv-file-input" accept=".pdf,.epub,.docx,.odt,.rtf,.txt,.md,.markdown,.html,.htm,.jpg,.jpeg,.png,.gif,.webp,.heic,.heif,application/pdf,text/plain">' +
       '<input type="file" id="fv-images" class="fv-file-input" multiple accept="image/*">' +
@@ -7507,6 +7590,120 @@ button { font: inherit; color: inherit; cursor: pointer; }
   function addCard(action, ic, title, body) {
     return '<button class="fv-card fv-card--row" data-action="' + action + '">' +
       cardBody(ic, title, body) + '</button>';
+  }
+
+  /**
+   * Translate a passage and hear it, without turning it into a book first.
+   * Paste Portuguese, hear the German; paste German, read the Portuguese and
+   * hear either side. This is the short path for checking how something
+   * sounds in the other language.
+   */
+  function viewTranslator() {
+    const p = App.params || {};
+    const langs = [
+      { id: 'pt-BR', label: 'Português (BR)' },
+      { id: 'de-DE', label: 'Deutsch' },
+      { id: 'en-US', label: 'English' }
+    ];
+    const target = p.target || App.prefs.quickTarget || 'de-DE';
+    let html = header(t('quickTranslate')) + '<div class="fv-pad">';
+    html += '<p class="fv-hint">' + esc(t('quickTranslateBody')) + '</p>';
+    html += '<label class="fv-label" for="fv-qt-text">' + esc(t('quickSource')) + '</label>';
+    html += '<textarea class="fv-input fv-textarea" id="fv-qt-text" rows="6" placeholder="' +
+      esc(t('quickPlaceholder')) + '">' + esc(p.source || '') + '</textarea>';
+    html += '<label class="fv-label" for="fv-qt-target">' + esc(t('translateTo')) + '</label>';
+    html += '<select class="fv-input" id="fv-qt-target">' + langs.map(function (l) {
+      return '<option value="' + l.id + '"' + (l.id === target ? ' selected' : '') + '>' + esc(l.label) + '</option>';
+    }).join('') + '</select>';
+    html += '<button class="fv-btn fv-btn--primary fv-btn--wide" data-action="qt-run">' + esc(t('translateAction')) + '</button>';
+
+    if (p.busy) html += '<p class="fv-hint">' + esc(t('translating')) + '</p>';
+    if (p.error) html += '<div class="fv-note fv-note--danger"><strong>' + esc(p.error) + '</strong></div>';
+
+    if (p.result) {
+      html += '<section class="fv-qt-result">';
+      html += '<h3 class="fv-h3">' + esc(FV.i18n.t('detectedLanguage')) + ': ' + esc(p.sourceLabel || p.sourceLang) + '</h3>';
+      html += '<div class="fv-note"><p>' + esc(p.source) + '</p></div>';
+      html += '<button class="fv-btn fv-btn--wide" data-action="qt-speak" data-side="source">' +
+        esc(t('hearOriginal')) + '</button>';
+      html += '<h3 class="fv-h3">' + esc(p.targetLabel || p.target) + '</h3>';
+      html += '<div class="fv-note fv-note--ok"><p>' + esc(p.result) + '</p></div>';
+      html += '<button class="fv-btn fv-btn--primary fv-btn--wide" data-action="qt-speak" data-side="target">' +
+        esc(t('hearTranslation')) + '</button>';
+      html += '<button class="fv-btn fv-btn--ghost fv-btn--wide" data-action="qt-save">' +
+        esc(t('quickSaveToLibrary')) + '</button>';
+      html += '</section>';
+    }
+    return html + '</div>';
+  }
+
+  async function runQuickTranslate() {
+    const textEl = document.getElementById('fv-qt-text');
+    const targetEl = document.getElementById('fv-qt-target');
+    const source = (textEl ? textEl.value : '').trim();
+    const target = targetEl ? targetEl.value : 'de-DE';
+    if (!source) { toast(t('quickSource'), 'warn'); return; }
+
+    const det = FV.detectLanguage(source, ['pt-BR', 'de-DE', 'en-US']);
+    const from = det.lang;
+    if (from === target) {
+      App.params = Object.assign({}, App.params, { source: source, target: target, error: t('quickSameLang'), result: null });
+      render();
+      return;
+    }
+    App.prefs.quickTarget = target;
+    await savePrefs();
+    App.params = Object.assign({}, App.params, { source: source, target: target, busy: true, error: null, result: null });
+    render();
+
+    const label = function (id) {
+      return { 'pt-BR': 'Português (BR)', 'de-DE': 'Deutsch', 'en-US': 'English' }[id] || id;
+    };
+    try {
+      const viaServer = FV.Premium.status && FV.Premium.status.selected && FV.Premium.status.selected.translate;
+      const out = viaServer
+        ? await FV.Premium.translate(source, from, target, [])
+        : await FV.Translator.translateParagraph(source, from, target, {
+          provider: App.prefs.translationProvider || 'auto',
+          email: App.prefs.translationEmail || '',
+          serverUrl: App.prefs.serverUrl || '',
+          glossary: []
+        });
+      App.params = Object.assign({}, App.params, {
+        busy: false, result: out, sourceLang: from, sourceLabel: label(from),
+        target: target, targetLabel: label(target)
+      });
+    } catch (e) {
+      App.params = Object.assign({}, App.params, {
+        busy: false, error: t('translationFailed') + (e && e.message ? ' · ' + e.message : '')
+      });
+    }
+    render();
+  }
+
+  async function speakQuick(side) {
+    const p = App.params || {};
+    const lang = side === 'target' ? p.target : p.sourceLang;
+    const text = side === 'target' ? p.result : p.source;
+    if (!text || !lang) return;
+    const spoken = FV.toSpokenForm(text, lang, await FV.Library.getDictionary());
+    const v = FV.Voices.pick(lang);
+    if (await speakWith(v, spoken, lang)) return;
+    if (typeof speechSynthesis === 'undefined') { toast(t('noVoicesBody'), 'warn'); return; }
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(spoken);
+      if (v && v._native) u.voice = v._native;
+      u.lang = lang;
+      speechSynthesis.speak(u);
+    } catch (e) { toast(t('errorBody'), 'warn'); }
+  }
+
+  async function saveQuickToLibrary() {
+    const p = App.params || {};
+    if (!p.result) return;
+    const title = p.source.split(/\s+/).slice(0, 6).join(' ');
+    await importPastedText(p.source, title);
   }
 
   function viewPaste() {
@@ -7615,7 +7812,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
     html += '<button class="fv-btn fv-btn--primary fv-btn--wide" data-action="read-now">' + esc(t('readNow')) + '</button>';
 
     html += '<div class="fv-tiles">' +
-      tile('go', 'translation', 'lang', t('translationMode') || t('readingModes')) +
+      /* `t()` falls back to the key itself, so `t(x) || t(y)` never reaches
+         the second call — the label has to be a key that exists. */
+      tile('go', 'translation', 'lang', t('readingModes')) +
       tile('go', 'voices', 'voice', t('voice')) +
       (chars ? tile('go', 'cast', 'cast', t('bookCast')) : '') +
       tile('go', 'ask', 'ask', t('askTitle')) +
@@ -8036,12 +8235,22 @@ button { font: inherit; color: inherit; cursor: pointer; }
     let html = header(t('exportAudio')) + '<div class="fv-pad">';
     html += '<label class="fv-check"><input type="checkbox" data-action="rights-ok"' + (ok ? ' checked' : '') + '> <span>' + esc(t('exportRights')) + '</span></label>';
     html += '<button class="fv-btn fv-btn--primary fv-btn--wide"' + (ok ? '' : ' disabled') + ' data-action="export-script">' + esc(t('exportScript')) + '</button>';
+    /* The message has to describe the state the reader is actually in: with a
+       server connected the obstacle is no longer synthesis, it is that joining
+       the sentences into one file is not built. */
+    const hasServerTts = !!(FV.Premium.status && FV.Premium.status.selected && FV.Premium.status.selected.tts);
+    const withServer = {
+      'pt-BR': 'O seu servidor gera o áudio frase a frase, e é assim que o app toca. Juntar tudo num único arquivo MP3 ou M4B com capítulos ainda não está construído. O roteiro de narração exporta normalmente, com a marcação completa.',
+      'de-DE': 'Ihr Server erzeugt das Audio satzweise, und so wird es auch abgespielt. Das Zusammenfügen zu einer MP3- oder M4B-Datei mit Kapiteln ist noch nicht gebaut. Das Narrationsskript lässt sich vollständig exportieren.',
+      'en-US': 'Your server produces the audio sentence by sentence, which is how playback works. Joining it into one MP3 or M4B with chapters is not built yet. The narration script exports fully, with all markup.'
+    };
+    const withoutServer = {
+      'pt-BR': 'A exportação de arquivo de áudio precisa de síntese de voz no servidor. A voz do aparelho não permite gravar o áudio em arquivo. O roteiro de narração exporta normalmente e contém a marcação completa.',
+      'de-DE': 'Der Audio-Export benötigt Sprachsynthese auf dem Server. Die Gerätestimme lässt keine Aufnahme in eine Datei zu. Das Narrationsskript lässt sich vollständig exportieren.',
+      'en-US': 'Exporting an audio file needs server-side speech synthesis. The device voice cannot be recorded to a file. The narration script exports fully, with all markup.'
+    };
     html += '<div class="fv-note fv-note--warn"><strong>' + esc(t('exportAudio')) + '</strong><br>' +
-      esc({
-        'pt-BR': 'A exportação de arquivo de áudio precisa de síntese de voz no servidor. A voz do aparelho não permite gravar o áudio em arquivo. O roteiro de narração exporta normalmente e contém a marcação completa.',
-        'de-DE': 'Der Audio-Export benötigt Sprachsynthese auf dem Server. Die Gerätestimme lässt keine Aufnahme in eine Datei zu. Das Narrationsskript lässt sich vollständig exportieren.',
-        'en-US': 'Exporting an audio file needs server-side speech synthesis. The device voice cannot be recorded to a file. The narration script exports fully, with all markup.'
-      }[FV.i18n.lang]) + '</div>';
+      esc((hasServerTts ? withServer : withoutServer)[FV.i18n.lang]) + '</div>';
     html += '</div>';
     return html;
   }
@@ -8267,6 +8476,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
       case 'open': await openDocument(el.getAttribute('data-id')); break;
 
       case 'go-paste': go('paste'); break;
+      case 'go-translator': go('translator', {}); break;
+      case 'qt-run': await runQuickTranslate(); break;
+      case 'qt-speak': await speakQuick(el.getAttribute('data-side')); break;
+      case 'qt-save': await saveQuickToLibrary(); break;
       case 'scan-rotate': await transformScan(parseInt(el.getAttribute('data-i'), 10), 'rotate'); break;
       case 'scan-enhance': await transformScan(parseInt(el.getAttribute('data-i'), 10), 'enhance'); break;
       case 'scan-crop': await transformScan(parseInt(el.getAttribute('data-i'), 10), 'crop'); break;
@@ -8635,14 +8848,38 @@ button { font: inherit; color: inherit; cursor: pointer; }
   }
 
   /* ------------------------------------------------------------- previews */
+  /** Speak one passage with a voice, using the server when the voice is one. */
+  async function speakWith(v, text, lang) {
+    if (v && v.premium) {
+      try {
+        const url = await FV.Premium.synthesize({
+          spokenText: text, lang: lang || 'pt-BR', rate: 1, pitch: 1, volume: 1,
+          emotion: 'neutral', intensity: 0.5, style: 'plain', contentType: 'prose'
+        }, v, lang);
+        const audio = new Audio(url);
+        speakWith._audio = audio;
+        await audio.play();
+        return true;
+      } catch (e) {
+        /* Say which voice actually spoke rather than letting the device voice
+           pass itself off as the premium one. */
+        toast(t('premiumFellBack') + ' · ' + (e && e.message ? e.message : ''), 'warn');
+      }
+    }
+    return false;
+  }
+
   function previewVoice(voiceId, lang, customText) {
-    if (typeof speechSynthesis === 'undefined') { toast(t('noVoicesBody'), 'warn'); return; }
     const v = voiceId ? FV.Voices.all().filter(function (x) { return x.id === voiceId; })[0] : FV.Voices.pick(lang);
     const text = customText || {
       'pt-BR': 'O moinho velho girava devagar sob a luz de uma estrela.',
       'de-DE': 'Der Mond kam hinter einer Wolke hervor und schien durch das Fenster.',
       'en-US': 'The old mill turned slowly under the light of a single star.'
     }[lang || (v && v.locale) || 'en-US'] || 'FolioVox. Every page deserves a voice.';
+    /* A premium voice must be heard through the server; falling through to the
+       device voice would demonstrate the wrong voice entirely. */
+    if (v && v.premium) { speakWith(v, text, lang || 'pt-BR'); return; }
+    if (typeof speechSynthesis === 'undefined') { toast(t('noVoicesBody'), 'warn'); return; }
     try {
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
